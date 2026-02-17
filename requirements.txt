@@ -1,0 +1,35 @@
+# Core LangChain
+langchain==0.1.0
+langchain-community==0.0.13
+langchain-openai==0.0.2
+langgraph==0.0.20
+langsmith==0.0.77
+
+# LLM Providers
+openai==1.7.0  # For OpenRouter API compatibility
+
+# Vector Stores & Embeddings
+chromadb==0.4.22
+faiss-cpu==1.7.4
+sentence-transformers==2.2.2
+
+# Document Processing
+pypdf==3.17.4
+beautifulsoup4==4.12.2
+python-multipart==0.0.6
+
+# Web Tools
+requests==2.31.0
+duckduckgo-search==4.1.0
+
+# API Framework (for later)
+fastapi==0.108.0
+uvicorn==0.25.0
+
+# Utilities
+python-dotenv==1.0.0
+pydantic==2.5.3
+
+# Jupyter Support
+ipykernel==6.28.0
+jupyter==1.0.0
