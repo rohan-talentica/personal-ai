@@ -16,9 +16,9 @@ A learning project to master LangChain, LangGraph, and AI agent development with
 
 ## 🗓️ 10-Day Learning Plan
 
-### Phase 1: Foundations (Days 1-2)
-- **Day 1**: Python essentials + First LangChain chain + LangSmith setup
-- **Day 2**: Chain types, prompt templates, conversation memory
+### ✅ Phase 1: Foundations (Days 1-2) — COMPLETE
+- **Day 1**: ✅ Python essentials + First LangChain chain + LangSmith setup
+- **Day 2**: ✅ Chain types, prompt templates, conversation memory
 
 ### Phase 2: Intelligence Layer (Days 3-5)
 - **Day 3**: Vector embeddings, vector DBs, RAG basics
@@ -81,7 +81,7 @@ personal-ai/
 - [OpenRouter](https://openrouter.ai/)
 
 ## 🎓 Daily Progress
-- [ ] Day 1: Python + LangChain Basics
+- [x] Day 1: Python + LangChain Basics ✅
 - [ ] Day 2: Chains & Memory
 - [ ] Day 3: RAG Fundamentals
 - [ ] Day 4: Advanced RAG
