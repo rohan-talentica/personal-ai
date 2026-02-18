@@ -19,9 +19,9 @@ A learning project to master LangChain, LangGraph, and AI agent development with
 ### ✅ Phase 1: Foundations (Days 1-2) — COMPLETE
 - **Day 1**: ✅ Python essentials + First LangChain chain + LangSmith setup
 - **Day 2**: ✅ Chain types, prompt templates, conversation memory
+- **Day 3**: ✅ Vector embeddings, vector DBs (ChromaDB), RAG basics
 
-### Phase 2: Intelligence Layer (Days 3-5)
-- **Day 3**: Vector embeddings, vector DBs, RAG basics
+### Phase 2: Intelligence Layer (Days 4-5)
 - **Day 4**: Advanced RAG with multiple sources and citations
 - **Day 5**: ReAct agents with tools and function calling
 
@@ -82,8 +82,8 @@ personal-ai/
 
 ## 🎓 Daily Progress
 - [x] Day 1: Python + LangChain Basics ✅
-- [ ] Day 2: Chains & Memory
-- [ ] Day 3: RAG Fundamentals
+- [x] Day 2: Chains & Memory ✅
+- [x] Day 3: RAG Fundamentals ✅
 - [ ] Day 4: Advanced RAG
 - [ ] Day 5: ReAct Agents
 - [ ] Day 6: LangGraph Intro
