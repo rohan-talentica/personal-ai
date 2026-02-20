@@ -26,7 +26,7 @@ A learning project to master LangChain, LangGraph, and AI agent development with
 - **Day 5**: ✅ ReAct agents with tools and function calling
 
 ### Phase 3: Stateful Workflows (Days 6-8) — IN PROGRESS
-- **Day 6**: Introduction to LangGraph and state management
+- **Day 6**: ✅ Introduction to LangGraph and state management
 - **Day 7**: Human-in-the-loop interrupts and approvals
 - **Day 8**: Memory systems across sessions
 
@@ -86,7 +86,7 @@ personal-ai/
 - [x] Day 3: RAG Fundamentals ✅
 - [x] Day 4: Advanced RAG with Citations ✅
 - [x] Day 5: ReAct Agents ✅
-- [ ] Day 6: LangGraph Intro
+- [x] Day 6: LangGraph Intro ✅
 - [ ] Day 7: Human-in-the-Loop
 - [ ] Day 8: Memory Systems
 - [ ] Day 9: Production Prep
