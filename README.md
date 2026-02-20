@@ -21,11 +21,11 @@ A learning project to master LangChain, LangGraph, and AI agent development with
 - **Day 2**: ✅ Chain types, prompt templates, conversation memory
 - **Day 3**: ✅ Vector embeddings, vector DBs (ChromaDB), RAG basics
 
-### ✅ Phase 2: Intelligence Layer (Days 4-5) — IN PROGRESS
+### ✅ Phase 2: Intelligence Layer (Days 4-5) — COMPLETE
 - **Day 4**: ✅ Advanced RAG with multiple sources and citations
-- **Day 5**: ReAct agents with tools and function calling
+- **Day 5**: ✅ ReAct agents with tools and function calling
 
-### Phase 3: Stateful Workflows (Days 6-8)
+### Phase 3: Stateful Workflows (Days 6-8) — IN PROGRESS
 - **Day 6**: Introduction to LangGraph and state management
 - **Day 7**: Human-in-the-loop interrupts and approvals
 - **Day 8**: Memory systems across sessions
@@ -85,7 +85,7 @@ personal-ai/
 - [x] Day 2: Chains & Memory ✅
 - [x] Day 3: RAG Fundamentals ✅
 - [x] Day 4: Advanced RAG with Citations ✅
-- [ ] Day 5: ReAct Agents
+- [x] Day 5: ReAct Agents ✅
 - [ ] Day 6: LangGraph Intro
 - [ ] Day 7: Human-in-the-Loop
 - [ ] Day 8: Memory Systems
