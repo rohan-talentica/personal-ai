@@ -43,6 +43,9 @@ chroma_db/
 faiss_index/
 *.index
 
+# Notebook SQLite databases (generated at runtime)
+notebooks/*.db
+
 # Logs
 *.log
 logs/

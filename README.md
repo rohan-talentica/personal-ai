@@ -25,10 +25,10 @@ A learning project to master LangChain, LangGraph, and AI agent development with
 - **Day 4**: ✅ Advanced RAG with multiple sources and citations
 - **Day 5**: ✅ ReAct agents with tools and function calling
 
-### Phase 3: Stateful Workflows (Days 6-8) — IN PROGRESS
+### ✅ Phase 3: Stateful Workflows (Days 6-8) — COMPLETE
 - **Day 6**: ✅ Introduction to LangGraph and state management
-- **Day 7**: Human-in-the-loop interrupts and approvals
-- **Day 8**: Memory systems across sessions
+- **Day 7**: ✅ Human-in-the-loop interrupts and approvals
+- **Day 8**: ✅ Memory systems across sessions
 
 ### Phase 4: Production (Days 9-10)
 - **Day 9**: Production patterns, FastAPI, containerization
@@ -52,8 +52,10 @@ cp .env.example .env
 # Edit .env and add your OpenRouter API key
 ```
 
-### 3. Start with Day 1
-Open `notebooks/day1_python_langchain_basics.ipynb` in VS Code
+### 3. Open the latest notebook
+Open `notebooks/day9_production_patterns.ipynb` in VS Code
+
+> **Current progress**: Day 8 complete — resuming at Day 9 (Production Prep)
 
 ## 📁 Project Structure
 ```
@@ -87,7 +89,7 @@ personal-ai/
 - [x] Day 4: Advanced RAG with Citations ✅
 - [x] Day 5: ReAct Agents ✅
 - [x] Day 6: LangGraph Intro ✅
-- [ ] Day 7: Human-in-the-Loop
-- [ ] Day 8: Memory Systems
+- [x] Day 7: Human-in-the-Loop ✅
+- [x] Day 8: Memory Systems ✅
 - [ ] Day 9: Production Prep
 - [ ] Day 10: AWS Deployment
