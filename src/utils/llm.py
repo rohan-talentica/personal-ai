@@ -11,11 +11,10 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 load_dotenv()
 
-OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
-
 DEFAULT_CHAT_MODEL: str = "openai/gpt-3.5-turbo"
 DEFAULT_EMBED_MODEL: str = "text-embedding-3-small"
+
 
 
 @lru_cache(maxsize=4)
@@ -29,13 +28,14 @@ def get_llm(
         model: OpenRouter model identifier (e.g. "openai/gpt-3.5-turbo").
         temperature: Sampling temperature. Use 0 for agents, 0.7 for chat.
     """
-    if not OPENROUTER_API_KEY:
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
         raise EnvironmentError(
             "OPENROUTER_API_KEY is not set. Add it to your .env file."
         )
     return ChatOpenAI(
         model=model,
-        openai_api_key=OPENROUTER_API_KEY,
+        openai_api_key=api_key,
         openai_api_base=OPENROUTER_BASE_URL,
         temperature=temperature,
     )
@@ -48,12 +48,13 @@ def get_embeddings(model: str = DEFAULT_EMBED_MODEL) -> OpenAIEmbeddings:
     Args:
         model: Embedding model identifier.
     """
-    if not OPENROUTER_API_KEY:
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
         raise EnvironmentError(
             "OPENROUTER_API_KEY is not set. Add it to your .env file."
         )
     return OpenAIEmbeddings(
         model=model,
-        openai_api_key=OPENROUTER_API_KEY,
+        openai_api_key=api_key,
         openai_api_base=OPENROUTER_BASE_URL,
     )

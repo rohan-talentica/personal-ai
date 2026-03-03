@@ -1,0 +1,38 @@
+# Python virtual environments — largest offender
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Git
+.git/
+.gitignore
+
+# Infrastructure / CDK — never needed inside the container
+infrastructure/
+cdk.out/
+
+# Local development
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# Notebooks & docs — not part of the runtime
+notebooks/
+docs/
+
+# Test artefacts
+.pytest_cache/
+htmlcov/
+.coverage
+*.egg-info/
+dist/
+build/
+
+# Docker Compose files (not needed inside the image)
+docker-compose*.yml
