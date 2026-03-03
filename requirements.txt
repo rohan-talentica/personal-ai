@@ -11,6 +11,7 @@ openai>=1.50.0  # For OpenRouter API compatibility
 
 # Vector Stores & Embeddings
 chromadb>=0.5.0
+langchain-chroma>=1.0.0
 sentence-transformers>=3.0.0
 
 # Document Processing

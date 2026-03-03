@@ -30,8 +30,8 @@ A learning project to master LangChain, LangGraph, and AI agent development with
 - **Day 7**: ✅ Human-in-the-loop interrupts and approvals
 - **Day 8**: ✅ Memory systems across sessions
 
-### Phase 4: Production (Days 9-10)
-- **Day 9**: Production patterns, FastAPI, containerization
+### ✅ Phase 4: Production (Days 9-10) — IN PROGRESS
+- **Day 9**: ✅ Production patterns, FastAPI, containerization
 - **Day 10**: AWS deployment with CDK (ECS Fargate)
 
 ## 🚀 Quick Start
@@ -55,21 +55,44 @@ cp .env.example .env
 ### 3. Open the latest notebook
 Open `notebooks/day9_production_patterns.ipynb` in VS Code
 
-> **Current progress**: Day 8 complete — resuming at Day 9 (Production Prep)
+### 4. Run the FastAPI server
+```bash
+uvicorn src.api.main:app --reload --port 8000
+# Swagger UI → http://localhost:8000/docs
+```
+
+### 5. Run with Docker
+```bash
+docker compose up --build
+```
+
+> **Current progress**: Day 9 complete — resuming at Day 10 (AWS Deployment)
 
 ## 📁 Project Structure
 ```
 personal-ai/
-├── notebooks/          # Daily learning notebooks
+├── notebooks/              # Daily learning notebooks
 ├── src/
-│   ├── agents/        # LangGraph agents
-│   ├── chains/        # LangChain chains
-│   ├── memory/        # Memory implementations
-│   ├── tools/         # Custom tools
-│   └── api/           # FastAPI endpoints
-├── docs/              # Learning notes
-├── infrastructure/    # AWS CDK code
-└── requirements.txt   # Python dependencies
+│   ├── utils/
+│   │   └── llm.py          # Shared LLM + embeddings factory
+│   ├── chains/
+│   │   ├── chat.py         # Conversational chain (Days 1-2)
+│   │   └── rag.py          # RAG chain with citations (Days 3-4)
+│   ├── tools/
+│   │   └── custom_tools.py # calculator, word_counter, get_weather, summarizer
+│   ├── agents/
+│   │   └── react_agent.py  # ReAct tool-calling agent (Day 5)
+│   ├── memory/
+│   │   └── vector_store.py # ChromaDB helpers
+│   └── api/
+│       ├── main.py         # FastAPI app (Day 9)
+│       ├── models.py       # Pydantic schemas
+│       └── dependencies.py # FastAPI DI singletons
+├── Dockerfile              # Multi-stage production image
+├── docker-compose.yml      # App + ChromaDB volume
+├── docs/                   # Learning notes
+├── infrastructure/         # AWS CDK code (Day 10)
+└── requirements.txt        # Python dependencies
 ```
 
 ## 🔑 API Keys Needed
@@ -91,5 +114,5 @@ personal-ai/
 - [x] Day 6: LangGraph Intro ✅
 - [x] Day 7: Human-in-the-Loop ✅
 - [x] Day 8: Memory Systems ✅
-- [ ] Day 9: Production Prep
+- [x] Day 9: Production Patterns — FastAPI + Docker ✅
 - [ ] Day 10: AWS Deployment

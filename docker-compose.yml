@@ -1,0 +1,40 @@
+# docker-compose.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# Usage:
+#   docker compose up --build          # build & start
+#   docker compose up -d               # run in background
+#   docker compose logs -f api         # follow logs
+#   docker compose down                # stop & remove containers
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: personal-ai-api:latest
+    container_name: personal-ai-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      PORT: "8000"
+    volumes:
+      # Persist ChromaDB data at the path the code actually uses
+      - chroma_data:/app/notebooks/chroma_db_complete
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  chroma_data:
+    driver: local
