@@ -7,6 +7,7 @@ Endpoints
 GET  /health                 Liveness check
 POST /chat                   Stateless conversational chain (Days 1-2)
 POST /chat/stream            Same, but streams tokens via SSE
+POST /rag/ingest             Ingest a URL or raw text into ChromaDB
 POST /rag/query              RAG pipeline with citations (Days 3-4)
 POST /agent/run              ReAct agent with tools (Day 5)
 
@@ -41,9 +42,16 @@ from src.api.models import (
     ChatRequest,
     ChatResponse,
     HealthResponse,
+    IngestRequest,
+    IngestResponse,
     RAGRequest,
     RAGResponse,
     RAGSource,
+)
+from src.memory.vector_store import (
+    DEFAULT_COLLECTION,
+    DEFAULT_PERSIST_DIR,
+    ingest_documents,
 )
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -195,6 +203,37 @@ async def chat_stream(body: ChatRequest, chain=Depends(get_chat_chain)):
 
 
 # ── RAG ───────────────────────────────────────────────────────────────────────
+
+@app.post("/rag/ingest", response_model=IngestResponse, tags=["RAG"])
+async def rag_ingest(body: IngestRequest):
+    """Ingest a URL or raw text into ChromaDB.
+
+    The document is fetched (if a URL), split into chunks, embedded, and
+    upserted into the default ChromaDB collection.  Subsequent calls to
+    ``POST /rag/query`` will be able to retrieve the newly added content.
+    """
+    try:
+        chunks_added: int = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: ingest_documents(
+                url=body.url,
+                text=body.text,
+                title=body.title,
+                source=body.source,
+                chunk_size=body.chunk_size,
+                chunk_overlap=body.chunk_overlap,
+                persist_directory=DEFAULT_PERSIST_DIR,
+                collection_name=DEFAULT_COLLECTION,
+            ),
+        )
+        return IngestResponse(
+            chunks_added=chunks_added,
+            collection=DEFAULT_COLLECTION,
+        )
+    except Exception as exc:
+        logger.error("Ingest error: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
 
 @app.post("/rag/query", response_model=RAGResponse, tags=["RAG"])
 async def rag_query(body: RAGRequest, chain=Depends(get_rag_chain)):

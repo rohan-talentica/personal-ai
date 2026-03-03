@@ -5,9 +5,9 @@ Keep all input/output schemas here so they are easy to extend.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ class ChatResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# RAG  (/rag/query)
+# RAG  (/rag/query  &  /rag/ingest)
 # ---------------------------------------------------------------------------
 
 class RAGRequest(BaseModel):
@@ -55,6 +55,31 @@ class RAGSource(BaseModel):
 class RAGResponse(BaseModel):
     answer: str
     sources: list[RAGSource]
+
+
+class IngestRequest(BaseModel):
+    """Body for POST /rag/ingest.
+
+    Provide exactly one of ``url`` or ``text``.
+    """
+    url: Optional[str] = Field(None, description="Public URL to fetch and ingest.")
+    text: Optional[str] = Field(None, description="Raw text to ingest directly.")
+    title: str = Field("Untitled", description="Human-readable title stored as metadata.")
+    source: str = Field("", description="Source label stored as metadata.")
+    chunk_size: int = Field(500, ge=50, le=5000, description="Characters per chunk.")
+    chunk_overlap: int = Field(50, ge=0, le=500, description="Overlap between consecutive chunks.")
+
+    @model_validator(mode="after")
+    def _require_url_or_text(self) -> "IngestRequest":
+        if not self.url and not self.text:
+            raise ValueError("Provide either 'url' or 'text'.")
+        return self
+
+
+class IngestResponse(BaseModel):
+    chunks_added: int
+    collection: str
+    message: str = "OK"
 
 
 # ---------------------------------------------------------------------------

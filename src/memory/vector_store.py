@@ -1,21 +1,26 @@
 """
-Vector store helpers for building and loading ChromaDB collections.
+Vector store helpers for building, loading, and ingesting into ChromaDB.
 
 Used by the RAG chain (src/chains/rag.py) and can be called directly
 from the FastAPI startup handler to warm up the retriever.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from src.utils.llm import get_embeddings
 
-# Default persist location (relative to project root)
-DEFAULT_PERSIST_DIR = "notebooks/chroma_db_complete"
+logger = logging.getLogger(__name__)
+
+# Default persist location — overridden by CHROMA_DB_PATH env var on ECS
+import os as _os
+DEFAULT_PERSIST_DIR: str = _os.getenv("CHROMA_DB_PATH", "notebooks/chroma_db_complete")
 DEFAULT_COLLECTION = "complete_kb"
 
 
@@ -105,3 +110,96 @@ def get_retriever(
         collection_name=collection_name,
     )
     return store.as_retriever(search_kwargs={"k": k})
+
+
+def ingest_documents(
+    *,
+    url: str | None = None,
+    text: str | None = None,
+    title: str = "Untitled",
+    source: str = "",
+    chunk_size: int = 500,
+    chunk_overlap: int = 50,
+    persist_directory: str | None = None,
+    collection_name: str = DEFAULT_COLLECTION,
+) -> int:
+    """Chunk and upsert text or a public URL into a ChromaDB collection.
+
+    Creates the collection (and the persist directory) if they don't exist
+    yet — important for ECS where the disk starts empty on every task start.
+
+    Args:
+        url: Public URL to fetch and ingest (BS4 used to extract text).
+        text: Raw text to ingest (used when url is None).
+        title: Added to document metadata as ``title``.
+        source: Added to document metadata as ``source``.
+        chunk_size: Target character count per chunk.
+        chunk_overlap: Overlap characters between consecutive chunks.
+        persist_directory: ChromaDB directory; defaults to DEFAULT_PERSIST_DIR.
+        collection_name: Collection to write into.
+
+    Returns:
+        Number of chunks added.
+
+    Raises:
+        ValueError: If neither url nor text is supplied.
+    """
+    if not url and not text:
+        raise ValueError("Provide either 'url' or 'text'.")
+
+    persist_dir = persist_directory or DEFAULT_PERSIST_DIR
+    persist_path = Path(persist_dir)
+    persist_path.mkdir(parents=True, exist_ok=True)
+
+    # ── Fetch content ─────────────────────────────────────────────────────
+    if url:
+        import requests
+        from bs4 import BeautifulSoup
+
+        logger.info("Fetching URL for ingest: %s", url)
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        # Remove script/style clutter
+        for tag in soup(["script", "style", "nav", "footer", "header"]):
+            tag.decompose()
+        raw_text = soup.get_text(separator="\n", strip=True)
+        source = source or url
+    else:
+        raw_text = text  # type: ignore[assignment]
+
+    # ── Split ─────────────────────────────────────────────────────────────
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+    )
+    chunks = splitter.split_text(raw_text)
+    if not chunks:
+        logger.warning("ingest_documents: no chunks produced — is the text empty?")
+        return 0
+
+    docs = [
+        Document(
+            page_content=chunk,
+            metadata={
+                "title": title,
+                "source": source,
+                "document_type": "url" if url else "text",
+            },
+        )
+        for chunk in chunks
+    ]
+
+    # ── Upsert into ChromaDB ──────────────────────────────────────────────
+    embeddings = get_embeddings()
+    vectorstore = Chroma(
+        collection_name=collection_name,
+        embedding_function=embeddings,
+        persist_directory=str(persist_path),
+    )
+    vectorstore.add_documents(docs)
+    logger.info(
+        "ingest_documents: added %d chunks to collection '%s' at '%s'",
+        len(docs), collection_name, persist_dir,
+    )
+    return len(docs)

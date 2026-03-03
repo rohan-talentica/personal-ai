@@ -23,9 +23,11 @@ services:
       - .env
     environment:
       PORT: "8000"
+      # Must match the volume mount below — mirrors the ECS task definition
+      CHROMA_DB_PATH: "/app/data/chroma"
     volumes:
-      # Persist ChromaDB data at the path the code actually uses
-      - chroma_data:/app/notebooks/chroma_db_complete
+      # Persist ChromaDB data across container restarts (mirrors ECS ephemeral storage)
+      - chroma_data:/app/data/chroma
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c",
