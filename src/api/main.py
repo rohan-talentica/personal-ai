@@ -47,6 +47,8 @@ from src.api.models import (
     RAGRequest,
     RAGResponse,
     RAGSource,
+    RevisionRequest,
+    RevisionResponse,
 )
 from src.memory.vector_store import (
     DEFAULT_COLLECTION,
@@ -262,6 +264,113 @@ async def rag_query(body: RAGRequest, chain=Depends(get_rag_chain)):
     except Exception as exc:
         logger.error("RAG error: %s", exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+# ── Notion / Revision ─────────────────────────────────────────────────────────
+
+@app.post("/notion/revise", response_model=RevisionResponse, tags=["Notion"])
+async def notion_revise(body: RevisionRequest):
+    """Fetch Notion notes for a given day and return a structured revision summary.
+
+    Supply a natural-language query like:
+    - ``"what did I learn on Monday?"``
+    - ``"revise yesterday's notes"``
+    - ``"summarise my notes from March 3rd"``
+
+    The endpoint will:
+    1. Use the LLM to resolve the date from the query.
+    2. Fetch all Notion pages for that date.
+    3. Run the revision chain to produce a structured summary.
+    """
+    from datetime import date as date_cls
+    import re
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from src.tools.notion_tool import get_daily_notes
+    from src.chains.revision import build_revision_chain
+    from src.utils.llm import get_llm
+
+    # ── Step 1: Resolve the date from the natural-language query ──────────────
+    # Use the LLM with temperature=0 (deterministic) and a focused prompt.
+    # The prompt separates "what date is implied?" from "answer the user's question"
+    # so the model doesn't confuse a date-extraction task with a personal query.
+    try:
+        today = date_cls.today().isoformat()
+        llm = get_llm(temperature=0)
+        date_resolution_prompt = [
+            SystemMessage(
+                content=(
+                    f"Today's date is {today}. "
+                    "Your task: identify which calendar date the user is referring to in their message. "
+                    "Do NOT answer their question. Do NOT explain. "
+                    "Output ONLY a single date in YYYY-MM-DD format and nothing else. "
+                    "Examples:\n"
+                    "  'what did I learn today?' → {today}\n"
+                    "  'revise Monday's notes' → the most recent Monday\n"
+                    "  'what did I study yesterday?' → yesterday's date\n"
+                    "  'summarise March 3rd' → 2026-03-03"
+                ).format(today=today)
+            ),
+            HumanMessage(content=body.query),
+        ]
+        resolved_date: str = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: llm.invoke(date_resolution_prompt).content.strip(),
+        )
+        logger.info("Resolved date '%s' from query: %s", resolved_date, body.query)
+    except Exception as exc:
+        logger.error("Date resolution failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Could not parse date from query: {exc}") from exc
+
+    # Sanity check — LLM must return something that looks like YYYY-MM-DD
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", resolved_date):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Could not extract a date from your query. Got: '{resolved_date}'. "
+                "Try: 'what did I learn on Monday?' or 'revise today's notes'."
+            ),
+        )
+
+    # ── Step 2: Fetch Notion pages ─────────────────────────────────────────────
+    try:
+        notes = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: get_daily_notes(resolved_date),
+        )
+    except Exception as exc:
+        logger.error("Notion fetch failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Notion API error: {exc}") from exc
+
+    if not notes:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No notes found in Notion for {resolved_date}. Make sure a page with that date exists and is shared with your integration.",
+        )
+
+    # ── Step 3: Concatenate all page content and run revision chain ────────────
+    combined_content = "\n\n---\n\n".join(
+        f"**{note['title']}**\n\n{note['content']}" for note in notes
+    )
+
+    try:
+        chain = build_revision_chain()
+        summary: str = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: chain.invoke({
+                "date": resolved_date,
+                "question": body.query,
+                "content": combined_content,
+            }),
+        )
+    except Exception as exc:
+        logger.error("Revision chain error: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return RevisionResponse(
+        date=resolved_date,
+        pages_found=len(notes),
+        summary=summary,
+    )
 
 
 # ── Agent ─────────────────────────────────────────────────────────────────────

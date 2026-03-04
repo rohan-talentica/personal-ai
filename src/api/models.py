@@ -99,3 +99,21 @@ class AgentStep(BaseModel):
 class AgentResponse(BaseModel):
     output: str
     steps: list[AgentStep]
+
+
+# ---------------------------------------------------------------------------
+# Notion Revision  (/notion/revise)
+# ---------------------------------------------------------------------------
+
+class RevisionRequest(BaseModel):
+    query: str = Field(
+        ...,
+        min_length=1,
+        description="Natural language query, e.g. 'what did I learn on Monday?'",
+    )
+
+
+class RevisionResponse(BaseModel):
+    date: str = Field(description="Resolved date in YYYY-MM-DD format.")
+    pages_found: int = Field(description="Number of Notion pages retrieved for that date.")
+    summary: str = Field(description="LLM-generated markdown revision summary.")
