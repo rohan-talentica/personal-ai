@@ -55,7 +55,7 @@ get a structured revision summary pulled live from Notion.
 
 ---
 
-## 🔜 Phase 2 — Socratic Revision (Mode 2)
+## ✅ Phase 2 — Socratic Revision (Mode 2) — COMPLETE
 
 **What it does**: Instead of just summarising, the agent *quizzes* you.
 You answer → it evaluates → it follows up on weak areas.

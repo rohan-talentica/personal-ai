@@ -14,6 +14,9 @@ load_dotenv()
 OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
 DEFAULT_CHAT_MODEL: str = "openai/gpt-3.5-turbo"
 DEFAULT_EMBED_MODEL: str = "text-embedding-3-small"
+# Lightweight model for simple, deterministic tasks (e.g. date extraction).
+# A small 9B model is more than sufficient and much cheaper/faster.
+DATE_EXTRACTION_MODEL: str = "nvidia/nemotron-nano-9b-v2:free"
 
 
 

@@ -34,7 +34,7 @@ from fastapi.responses import StreamingResponse
 load_dotenv()
 
 # ── Internal imports ─────────────────────────────────────────────────────────
-from src.api.dependencies import get_agent, get_chat_chain, get_rag_chain
+from src.api.dependencies import get_agent, get_chat_chain, get_quiz_graph, get_rag_chain
 from src.api.models import (
     AgentRequest,
     AgentResponse,
@@ -49,6 +49,10 @@ from src.api.models import (
     RAGSource,
     RevisionRequest,
     RevisionResponse,
+    QuizStartRequest,
+    QuizStartResponse,
+    QuizAnswerRequest,
+    QuizAnswerResponse,
 )
 from src.memory.vector_store import (
     DEFAULT_COLLECTION,
@@ -80,6 +84,12 @@ async def lifespan(app: FastAPI):
         logger.info("✅ RAG chain ready")
     except Exception as exc:
         logger.warning("⚠️  RAG chain init failed (no vector store?): %s", exc)
+
+    try:
+        get_quiz_graph()
+        logger.info("✅ Quiz graph ready")
+    except Exception as exc:
+        logger.warning("⚠️  Quiz graph init failed: %s", exc)
 
     try:
         get_agent()
@@ -287,7 +297,7 @@ async def notion_revise(body: RevisionRequest):
     from langchain_core.messages import HumanMessage, SystemMessage
     from src.tools.notion_tool import get_daily_notes
     from src.chains.revision import build_revision_chain
-    from src.utils.llm import get_llm
+    from src.utils.llm import get_llm, DATE_EXTRACTION_MODEL
 
     # ── Step 1: Resolve the date from the natural-language query ──────────────
     # Use the LLM with temperature=0 (deterministic) and a focused prompt.
@@ -295,7 +305,9 @@ async def notion_revise(body: RevisionRequest):
     # so the model doesn't confuse a date-extraction task with a personal query.
     try:
         today = date_cls.today().isoformat()
-        llm = get_llm(temperature=0)
+        # Use a small, fast model — date extraction is a simple structured task
+        # that doesn't require the full capability of the summarisation model.
+        llm = get_llm(model=DATE_EXTRACTION_MODEL, temperature=0)
         date_resolution_prompt = [
             SystemMessage(
                 content=(
@@ -371,6 +383,153 @@ async def notion_revise(body: RevisionRequest):
         pages_found=len(notes),
         summary=summary,
     )
+
+
+# ── Socratic Quiz (Phase 2) ──────────────────────────────────────────────────
+
+@app.post("/notion/quiz", response_model=QuizStartResponse, tags=["Notion"])
+async def notion_quiz_start(body: QuizStartRequest, graph=Depends(get_quiz_graph)):
+    """Start a Socratic revision session.
+    
+    1. Extracts date from query
+    2. Fetches Notion notes
+    3. Starts a LangGraph session to generate the first question
+    """
+    import uuid
+    from datetime import date as date_cls
+    import re
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from src.tools.notion_tool import get_daily_notes
+    from src.utils.llm import get_llm, DATE_EXTRACTION_MODEL
+
+    try:
+        today = date_cls.today().isoformat()
+        llm = get_llm(model=DATE_EXTRACTION_MODEL, temperature=0)
+        date_resolution_prompt = [
+            SystemMessage(
+                content=(
+                    f"Today's date is {today}. "
+                    "Your task: identify which calendar date the user is referring to in their message. "
+                    "Output ONLY a single date in YYYY-MM-DD format and nothing else. "
+                    "Examples:\n"
+                    "  'what did I learn today?' → {today}\n"
+                    "  'test me on Monday's notes' → the most recent Monday\n"
+                    "  'quiz me on March 3rd' → 2026-03-03"
+                ).format(today=today)
+            ),
+            HumanMessage(content=body.query),
+        ]
+        resolved_date: str = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: llm.invoke(date_resolution_prompt).content.strip(),
+        )
+    except Exception as exc:
+        logger.error("Date resolution failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Could not parse date from query: {exc}") from exc
+
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", resolved_date):
+        raise HTTPException(status_code=422, detail=f"Invalid date resolved: {resolved_date}")
+
+    try:
+        notes = await asyncio.get_event_loop().run_in_executor(None, lambda: get_daily_notes(resolved_date))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Notion API error: {exc}") from exc
+
+    if not notes:
+        raise HTTPException(status_code=404, detail=f"No notes found for {resolved_date}.")
+
+    combined_content = "\n\n---\n\n".join(f"**{note['title']}**\n\n{note['content']}" for note in notes)
+    session_id = str(uuid.uuid4())
+    config = {"configurable": {"thread_id": session_id}}
+
+    try:
+        # Initialize the graph state and run until END
+        initial_state = {
+            "date": resolved_date,
+            "content": combined_content,
+            "questions_asked": 0,
+            "weak_areas": [],
+            "messages": []
+        }
+        
+        state = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: graph.invoke(initial_state, config=config)
+        )
+        
+        # The generated question is the last message
+        latest_message = state["messages"][-1]
+        
+        return QuizStartResponse(
+            session_id=session_id,
+            date=resolved_date,
+            pages_found=len(notes),
+            question=latest_message.content
+        )
+    except Exception as exc:
+        logger.error("Quiz graph error: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/notion/quiz/{session_id}/answer", response_model=QuizAnswerResponse, tags=["Notion"])
+async def notion_quiz_answer(session_id: str, body: QuizAnswerRequest, graph=Depends(get_quiz_graph)):
+    """Answer a quiz question and advance the graph."""
+    from langchain_core.messages import HumanMessage
+    
+    config = {"configurable": {"thread_id": session_id}}
+    
+    # 1. First, check if thread exists
+    try:
+        stored_state = graph.get_state(config)
+        if not stored_state.values:
+            raise HTTPException(status_code=404, detail="Quiz session not found or expired.")
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        logger.error("Error retrieving state: %s", exc)
+        raise HTTPException(status_code=500, detail="Error accessing session store.")
+
+    state_values = stored_state.values
+    if state_values.get("is_completed", False):
+        return QuizAnswerResponse(
+            evaluation="This quiz session is already completed.",
+            is_completed=True,
+            next_question=None
+        )
+
+    try:
+        # 2. Add the user's answer (as a HumanMessage) to the state thread
+        user_msg = HumanMessage(content=body.answer)
+        
+        # update_state appends the message to the state
+        graph.update_state(config, {"messages": [user_msg]})
+        
+        # 3. Resume the graph (it was interrupted before 'evaluate_answer')
+        # We pass None as input because the state is already updated.
+        state = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: graph.invoke(None, config=config)
+        )
+
+        # is_completed when the graph has no further nodes to run (reached END)
+        next_nodes = graph.get_state(config).next
+        is_completed = len(next_nodes) == 0
+
+        feedback = state.get("evaluation_feedback", "Evaluated.")
+
+        next_question = None
+        if not is_completed:
+            # The last message is the new question generated after evaluation
+            next_question = state["messages"][-1].content
+
+        return QuizAnswerResponse(
+            evaluation=feedback,
+            is_completed=is_completed,
+            next_question=next_question
+        )
+    except Exception as exc:
+        logger.error("Graph resuming failed: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc))
 
 
 # ── Agent ─────────────────────────────────────────────────────────────────────
