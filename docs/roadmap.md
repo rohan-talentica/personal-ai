@@ -80,20 +80,35 @@ the agent decides the next question based on your previous answer.
 
 ---
 
-## 🔜 Phase 3 — Long-Term Progress Tracker (Mode 3)
-
-**What it does**: Track your knowledge over multiple weeks. Identify topics you are
-consistently shaky on vs. topics you have mastered.
-
-### What to build
-- After each quiz session, embed the Q&A into ChromaDB with metadata (topic, confidence score)
-- Weekly summary endpoint: "What am I weakest at?"
-- Surfacing recurring gaps: "CAP theorem — 3 sessions, low confidence every time"
-
-### What you will learn
-- Persistent memory patterns (episodic + semantic)
-- LLM-as-judge (scoring confidence from answers)
-- Cross-session analytics
+---
+ 
+ ## ✅ Phase 3 — Long-Term Progress Tracker (Mode 3) — COMPLETE
+ 
+ **What it does**: Tracks your knowledge over multiple weeks by storing quiz Q&A
+ into a persistent memory store. Generates an LLM-powered weakness report to
+ highlight recurring gaps.
+ 
+ **Endpoint**: `GET /notion/progress`
+ 
+ ### What was built
+ - **Quiz Persistence Hook**: Each answer in a quiz session is embedded into the `quiz_history` collection with metadata (`concept`, `is_correct`, `confidence_score`).
+ - **Progress Chain**: An LCEL chain that retrieves your 30 most recent weak areas and generates a markdown report with actionable revision suggestions.
+ - **ChromaDB Cloud Migration**: Switched from ephemeral local storage to persistent ChromaDB Cloud.
+ - **Vector Store Abstraction**: Implemented the **Strategy Pattern** for the memory layer. The code is now provider-agnostic (`VectorStoreAdapter`).
+ 
+ ### Files added/modified
+ | File | Purpose |
+ |------|---------|
+ | `src/memory/quiz_memory.py` | Quiz history ingestion and retrieval logic |
+ | `src/chains/progress.py` | LLM weakness report generator chain |
+ | `src/memory/base.py` | `VectorStoreAdapter` interface (ABC) |
+ | `src/memory/providers/` | Concrete implementations (starting with `ChromaAdapter`) |
+ | `src/memory/factory.py` | Provider factory controlled by `VECTOR_STORE_PROVIDER` env var |
+ 
+ ### Key lessons learned
+ - **Repository Pattern in Agents**: Decoupling the vector store provider makes the agent infrastructure portable (Pinecone/Qdrant ready).
+ - **Granular Analytics**: Storing Q&A *per answer* allows for better tracking than storing *per session*.
+ - **LLM-as-Analyst**: Using a dedicated chain to summarize retrieved failures into a coherent learning path.
 
 ---
 
@@ -113,11 +128,10 @@ at the time.
 
 ## 🏗️ What Is Deployed Today
 
-| Layer | What's running |
-|-------|---------------|
 | **API** | FastAPI on ECS Fargate (ap-south-1), behind ALB |
 | **LLM** | OpenRouter → GPT-3.5-turbo (default) |
-| **Vector DB** | ChromaDB on ECS (ephemeral — needs ingest on restart) |
+| **Vector DB** | **ChromaDB Cloud** (Persistent, multi-tenant) |
+| **Store Provider**| Pluggable Adapter Pattern (Strategy) |
 | **Notion** | Integration connected, DB ID `319a5bf6db5e80549961c5f23841073e` |
 | **Infra** | AWS CDK (Python), ECR for Docker images |
 
@@ -129,8 +143,11 @@ uvicorn src.api.main:app --reload --port 8000
 # Deploy to ECS
 cd infrastructure && cdk deploy --profile personal-ai --require-approval never
 
-# Test revision endpoint
+# Test revision summary
 curl -X POST http://localhost:8000/notion/revise \
   -H "Content-Type: application/json" \
   -d '{"query": "what did I learn on Monday?"}'
+
+# Test progress report (NEW)
+curl -s http://localhost:8000/notion/progress | python3 -m json.tool
 ```

@@ -18,7 +18,7 @@ from src.agents.quiz_graph import build_quiz_graph
 from src.agents.react_agent import build_react_agent
 from src.chains.chat import build_chat_chain
 from src.chains.rag import build_rag_chain
-from src.memory.vector_store import DEFAULT_COLLECTION, DEFAULT_PERSIST_DIR
+from src.memory.vector_store import DEFAULT_COLLECTION
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,6 @@ def get_rag_chain():
     """Singleton RAG chain backed by the default ChromaDB collection."""
     logger.info("Initialising RAG chain…")
     return build_rag_chain(
-        persist_directory=DEFAULT_PERSIST_DIR,
         collection_name=DEFAULT_COLLECTION,
     )
 

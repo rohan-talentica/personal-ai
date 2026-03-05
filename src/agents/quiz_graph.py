@@ -34,6 +34,8 @@ class QuizState(TypedDict):
     questions_asked: int
     weak_areas: Annotated[List[str], operator.add]
     evaluation_feedback: str
+    last_concept: str           # concept tested in the most recent evaluation
+    last_confidence_score: float  # 0.0-1.0 score from the most recent evaluation
     is_completed: bool
 
 
@@ -42,6 +44,12 @@ class EvaluationOutput(BaseModel):
     feedback: str = Field(description="Direct, encouraging feedback to the user on their answer.")
     is_correct: bool = Field(description="True if the user correctly grasped the core concept.")
     concept_tested: str = Field(description="The core topic or concept that was tested.")
+    confidence_score: float = Field(
+        description=(
+            "A score from 0.0 to 1.0 reflecting how well the user demonstrated understanding. "
+            "1.0 = perfect, complete answer. 0.5 = partial understanding. 0.0 = completely wrong or blank."
+        )
+    )
 
 
 class QuestionOutput(BaseModel):
@@ -110,7 +118,7 @@ Source material:
 {state['content']}
 
 Evaluate the user's most recent answer to the most recent question in the conversation."""
-    messages = [SystemMessage(content=system_prompt)] + state.get("messages", [])
+    messages = [SystemMessage(content=system_prompt)] + state.get("messages", [])[-2:]
     
     result: EvaluationOutput = evaluator_llm.invoke(messages)
     
@@ -120,6 +128,8 @@ Evaluate the user's most recent answer to the most recent question in the conver
     
     return {
         "evaluation_feedback": result.feedback,
+        "last_concept": result.concept_tested,
+        "last_confidence_score": result.confidence_score,
         "weak_areas": weak_areas
     }
 

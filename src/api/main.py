@@ -44,6 +44,7 @@ from src.api.models import (
     HealthResponse,
     IngestRequest,
     IngestResponse,
+    ProgressResponse,
     RAGRequest,
     RAGResponse,
     RAGSource,
@@ -56,8 +57,12 @@ from src.api.models import (
 )
 from src.memory.vector_store import (
     DEFAULT_COLLECTION,
-    DEFAULT_PERSIST_DIR,
     ingest_documents,
+)
+from src.memory.quiz_memory import (
+    ingest_quiz_qa,
+    query_weak_areas,
+    get_all_stats,
 )
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -234,7 +239,6 @@ async def rag_ingest(body: IngestRequest):
                 source=body.source,
                 chunk_size=body.chunk_size,
                 chunk_overlap=body.chunk_overlap,
-                persist_directory=DEFAULT_PERSIST_DIR,
                 collection_name=DEFAULT_COLLECTION,
             ),
         )
@@ -516,11 +520,59 @@ async def notion_quiz_answer(session_id: str, body: QuizAnswerRequest, graph=Dep
         is_completed = len(next_nodes) == 0
 
         feedback = state.get("evaluation_feedback", "Evaluated.")
+        concept = state.get("_last_concept", "Unknown")  # may be absent on older sessions
 
         next_question = None
         if not is_completed:
             # The last message is the new question generated after evaluation
             next_question = state["messages"][-1].content
+
+        # ── Phase 3: Ingest this Q&A pair into quiz_history ──────────────────
+        # We reconstruct the Q&A from the last two messages before resumption:
+        # messages[-2] = AI question, messages[-1] (before graph resumed) = user answer
+        # After graph.invoke the evaluate node has run and state reflects results.
+        # We read the conversation messages to find the most recent Q+A pair.
+        try:
+            msgs = state.get("messages", [])
+            # Most recent AI question is the second-to-last message (last is new question if any)
+            # Find the last HumanMessage (answer) and the AIMessage just before it
+            ai_question = ""
+            user_answer = ""
+            for i in range(len(msgs) - 1, -1, -1):
+                msg = msgs[i]
+                if hasattr(msg, "type"):
+                    if msg.type == "human" and not user_answer:
+                        user_answer = msg.content
+                    elif msg.type == "ai" and user_answer and not ai_question:
+                        ai_question = msg.content
+                        break
+
+            if ai_question and user_answer:
+                eval_feedback = state.get("evaluation_feedback", "")
+                # Use real LLM-scored values from QuizState (set by evaluate_answer node)
+                concept = state.get("last_concept", "General")
+                conf_score = state.get("last_confidence_score", 0.5)
+                weak_areas = state.get("weak_areas", [])
+                # A concept is in weak_areas only when is_correct=False
+                qa_is_correct = concept not in weak_areas
+
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: ingest_quiz_qa(
+                        session_id=session_id,
+                        date=state_values.get("date", "unknown"),
+                        question=ai_question,
+                        answer=user_answer,
+                        feedback=eval_feedback,
+                        concept=concept,
+                        is_correct=qa_is_correct,
+                        confidence_score=conf_score,
+                    )
+                )
+                logger.info("Phase 3: ingested Q&A for session %s", session_id)
+        except Exception as ingest_exc:
+            # Ingest failure must NOT break the quiz flow
+            logger.warning("Phase 3 ingest error (non-fatal): %s", ingest_exc)
 
         return QuizAnswerResponse(
             evaluation=feedback,
@@ -532,7 +584,45 @@ async def notion_quiz_answer(session_id: str, body: QuizAnswerRequest, graph=Dep
         raise HTTPException(status_code=502, detail=str(exc))
 
 
+
+# ── Progress Tracker (Phase 3) ──────────────────────────────────────────────
+
+@app.get("/notion/progress", response_model=ProgressResponse, tags=["Notion"])
+async def notion_progress():
+    """Return a personalised weakness report based on all past quiz sessions.
+
+    Retrieves Q&A pairs where you answered incorrectly from the persistent
+    ``quiz_history`` ChromaDB collection, then asks the LLM to identify
+    recurring knowledge gaps and rank them by frequency.
+
+    Call this after completing one or more quiz sessions via ``POST /notion/quiz``.
+    """
+    from src.chains.progress import build_progress_chain
+
+    try:
+        stats = await asyncio.get_event_loop().run_in_executor(None, get_all_stats)
+
+        docs = await asyncio.get_event_loop().run_in_executor(None, query_weak_areas)
+
+        chain = build_progress_chain()
+        report: str = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: chain.invoke(docs),
+        )
+
+        return ProgressResponse(
+            sessions_analysed=stats["sessions"],
+            total_qa_pairs=stats["total_qa_pairs"],
+            weak_qa_pairs=stats["weak_qa_pairs"],
+            report=report,
+        )
+    except Exception as exc:
+        logger.error("Progress endpoint error: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 # ── Agent ─────────────────────────────────────────────────────────────────────
+
 
 @app.post("/agent/run", response_model=AgentResponse, tags=["Agent"])
 async def agent_run(body: AgentRequest, executor=Depends(get_agent)):

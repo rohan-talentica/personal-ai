@@ -9,13 +9,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_chroma import Chroma
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda, RunnableParallel, RunnablePassthrough, Runnable
 from operator import itemgetter
 
-from src.utils.llm import get_llm, get_embeddings
+from src.memory.vector_store import get_retriever
+from src.utils.llm import get_llm
 
 _RAG_SYSTEM = """\
 You are a precise AI assistant that answers questions strictly from the provided context.
@@ -43,13 +43,14 @@ def _format_docs(docs: list[Any]) -> str:
 
 
 def build_rag_chain(
-    persist_directory: str,
-    collection_name: str = "rag_collection",
+    collection_name: str = "complete_kb",
     k: int = 4,
     model: str = "openai/gpt-3.5-turbo",
     temperature: float = 0.0,
+    # Legacy param kept for compat — no longer used
+    persist_directory: str | None = None,
 ) -> Runnable:
-    """Build a RAG chain backed by a persisted ChromaDB collection.
+    """Build a RAG chain backed by a ChromaDB collection (Cloud or local).
 
     The returned chain expects a dict with:
         - ``question`` (str): the user's query
@@ -59,19 +60,12 @@ def build_rag_chain(
         - ``sources`` (list[dict]): list of retrieved document metadata
 
     Args:
-        persist_directory: Path to the ChromaDB persist directory.
         collection_name: Name of the collection inside ChromaDB.
         k: Number of documents to retrieve per query.
         model: OpenRouter model identifier.
         temperature: Sampling temperature (0 recommended for RAG).
     """
-    embeddings = get_embeddings()
-    vectorstore = Chroma(
-        collection_name=collection_name,
-        embedding_function=embeddings,
-        persist_directory=persist_directory,
-    )
-    retriever = vectorstore.as_retriever(search_kwargs={"k": k})
+    retriever = get_retriever(collection_name=collection_name, k=k)
 
     llm = get_llm(model=model, temperature=temperature)
 

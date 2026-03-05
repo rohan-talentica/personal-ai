@@ -146,3 +146,14 @@ class QuizAnswerResponse(BaseModel):
     evaluation: str = Field(description="Feedback on the user's answer.")
     is_completed: bool = Field(description="True if the quiz is finished.")
     next_question: Optional[str] = Field(None, description="The next question, if not completed.")
+
+
+# ---------------------------------------------------------------------------
+# Progress Tracker  (/notion/progress)
+# ---------------------------------------------------------------------------
+
+class ProgressResponse(BaseModel):
+    sessions_analysed: int = Field(description="Number of distinct quiz sessions in history.")
+    total_qa_pairs: int = Field(description="Total Q&A pairs stored across all sessions.")
+    weak_qa_pairs: int = Field(description="Number of Q&A pairs where the answer was incorrect.")
+    report: str = Field(description="LLM-generated markdown report of knowledge gaps.")
