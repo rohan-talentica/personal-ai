@@ -66,7 +66,7 @@ def build_revision_chain():
         ("system", _REVISION_SYSTEM),
         ("human", _REVISION_HUMAN),
     ])
-    llm = get_llm()
+    llm = get_llm(use_case="revision")
     parser = StrOutputParser()
 
     return prompt | llm | parser

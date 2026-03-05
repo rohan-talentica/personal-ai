@@ -24,10 +24,10 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -63,6 +63,7 @@ from src.memory.quiz_memory import (
     ingest_quiz_qa,
     query_weak_areas,
     get_all_stats,
+    get_last_n_session_ids,
 )
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -301,17 +302,13 @@ async def notion_revise(body: RevisionRequest):
     from langchain_core.messages import HumanMessage, SystemMessage
     from src.tools.notion_tool import get_daily_notes
     from src.chains.revision import build_revision_chain
-    from src.utils.llm import get_llm, DATE_EXTRACTION_MODEL
+    from src.utils.llm import get_llm
 
     # ── Step 1: Resolve the date from the natural-language query ──────────────
-    # Use the LLM with temperature=0 (deterministic) and a focused prompt.
-    # The prompt separates "what date is implied?" from "answer the user's question"
-    # so the model doesn't confuse a date-extraction task with a personal query.
+    # Use a small, fast model — date extraction is a simple deterministic task.
     try:
         today = date_cls.today().isoformat()
-        # Use a small, fast model — date extraction is a simple structured task
-        # that doesn't require the full capability of the summarisation model.
-        llm = get_llm(model=DATE_EXTRACTION_MODEL, temperature=0)
+        llm = get_llm(use_case="date_extraction", temperature=0)
         date_resolution_prompt = [
             SystemMessage(
                 content=(
@@ -404,11 +401,11 @@ async def notion_quiz_start(body: QuizStartRequest, graph=Depends(get_quiz_graph
     import re
     from langchain_core.messages import HumanMessage, SystemMessage
     from src.tools.notion_tool import get_daily_notes
-    from src.utils.llm import get_llm, DATE_EXTRACTION_MODEL
+    from src.utils.llm import get_llm
 
     try:
         today = date_cls.today().isoformat()
-        llm = get_llm(model=DATE_EXTRACTION_MODEL, temperature=0)
+        llm = get_llm(use_case="date_extraction", temperature=0)
         date_resolution_prompt = [
             SystemMessage(
                 content=(
@@ -453,6 +450,7 @@ async def notion_quiz_start(body: QuizStartRequest, graph=Depends(get_quiz_graph
             "content": combined_content,
             "questions_asked": 0,
             "weak_areas": [],
+            "asked_concepts": [],
             "messages": []
         }
         
@@ -588,21 +586,38 @@ async def notion_quiz_answer(session_id: str, body: QuizAnswerRequest, graph=Dep
 # ── Progress Tracker (Phase 3) ──────────────────────────────────────────────
 
 @app.get("/notion/progress", response_model=ProgressResponse, tags=["Notion"])
-async def notion_progress():
-    """Return a personalised weakness report based on all past quiz sessions.
+async def notion_progress(
+    last_n_sessions: Optional[int] = Query(
+        None,
+        ge=1,
+        description="Limit analysis to the N most recent quiz sessions. Omit to analyse all sessions.",
+    )
+):
+    """Return a personalised weakness report based on past quiz sessions.
 
     Retrieves Q&A pairs where you answered incorrectly from the persistent
     ``quiz_history`` ChromaDB collection, then asks the LLM to identify
     recurring knowledge gaps and rank them by frequency.
 
-    Call this after completing one or more quiz sessions via ``POST /notion/quiz``.
+    Pass ``?last_n_sessions=N`` to restrict the report to the N most recent sessions.
+    Omit the parameter to analyse all sessions.
     """
     from src.chains.progress import build_progress_chain
 
     try:
-        stats = await asyncio.get_event_loop().run_in_executor(None, get_all_stats)
+        target_session_ids = None
+        if last_n_sessions is not None:
+            target_session_ids = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: get_last_n_session_ids(last_n_sessions)
+            )
 
-        docs = await asyncio.get_event_loop().run_in_executor(None, query_weak_areas)
+        stats = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: get_all_stats(session_ids=target_session_ids)
+        )
+
+        docs = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: query_weak_areas(session_ids=target_session_ids)
+        )
 
         chain = build_progress_chain()
         report: str = await asyncio.get_event_loop().run_in_executor(

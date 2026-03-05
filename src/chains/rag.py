@@ -45,7 +45,7 @@ def _format_docs(docs: list[Any]) -> str:
 def build_rag_chain(
     collection_name: str = "complete_kb",
     k: int = 4,
-    model: str = "openai/gpt-3.5-turbo",
+    use_case: str = "rag",
     temperature: float = 0.0,
     # Legacy param kept for compat — no longer used
     persist_directory: str | None = None,
@@ -67,7 +67,7 @@ def build_rag_chain(
     """
     retriever = get_retriever(collection_name=collection_name, k=k)
 
-    llm = get_llm(model=model, temperature=temperature)
+    llm = get_llm(use_case=use_case, temperature=temperature)
 
     prompt = ChatPromptTemplate.from_messages(
         [

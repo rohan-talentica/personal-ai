@@ -33,6 +33,7 @@ class QuizState(TypedDict):
     content: str
     questions_asked: int
     weak_areas: Annotated[List[str], operator.add]
+    asked_concepts: Annotated[List[str], operator.add]  # every concept tested so far
     evaluation_feedback: str
     last_concept: str           # concept tested in the most recent evaluation
     last_confidence_score: float  # 0.0-1.0 score from the most recent evaluation
@@ -62,13 +63,18 @@ class QuestionOutput(BaseModel):
 def generate_question(state: QuizState) -> Dict[str, Any]:
     """Generate a new question based on the notes. Does NOT pass message history
     to avoid the LLM feeling compelled to acknowledge prior answers."""
-    llm = get_llm(model="openrouter/free")
+    llm = get_llm(use_case="quiz", temperature=0)
     question_llm = llm.with_structured_output(QuestionOutput)
 
-    # Build a one-line hint from the previous evaluation (no narrative context)
-    eval_hint = ""
-    if state.get("evaluation_feedback"):
-        eval_hint = f"\nHint: the user last struggled with: {state['evaluation_feedback']}\n"
+    # Build an exclusion hint from concepts already tested in this session
+    asked_concepts = state.get("asked_concepts", [])
+    avoid_hint = ""
+    if asked_concepts:
+        avoid_hint = (
+            f"\nAlready-covered concepts (DO NOT ask about these again): "
+            + ", ".join(f'"{c}"' for c in asked_concepts)
+            + "\n"
+        )
 
     questions_asked = state.get("questions_asked", 0)
     question_number = questions_asked + 1
@@ -83,10 +89,9 @@ Rules (follow every single one):
 4. Do NOT include a preamble, a greeting, or any sentence other than the question itself.
 5. The output must be a single interrogative sentence ending with a question mark.
 6. Do NOT number the question or prefix it with "Question {question_number}:".
-
+7. Choose a DIFFERENT topic/concept from any already covered — broaden coverage across the notes.{avoid_hint}
 Notes from {state['date']}:
-{state['content']}
-{eval_hint}"""
+{state['content']}"""
 
     # Only pass the system message — no chat history so the LLM has nothing to "respond to"
     result: QuestionOutput = question_llm.invoke([SystemMessage(content=system_prompt)])
@@ -100,9 +105,7 @@ Notes from {state['date']}:
 
 def evaluate_answer(state: QuizState) -> Dict[str, Any]:
     """Evaluate the user's latest answer."""
-    # We must use a model that supports strict JSON schema structured outputs
-    # (gpt-3.5-turbo via OpenRouter throws a 400 error for JSON schema support)
-    llm = get_llm(model="openrouter/free")
+    llm = get_llm(use_case="quiz", temperature=0)
     evaluator_llm = llm.with_structured_output(EvaluationOutput)
     
     system_prompt = f"""\
@@ -130,7 +133,8 @@ Evaluate the user's most recent answer to the most recent question in the conver
         "evaluation_feedback": result.feedback,
         "last_concept": result.concept_tested,
         "last_confidence_score": result.confidence_score,
-        "weak_areas": weak_areas
+        "weak_areas": weak_areas,
+        "asked_concepts": [result.concept_tested],  # accumulate every tested concept
     }
 
 

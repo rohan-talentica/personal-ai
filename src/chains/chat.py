@@ -20,7 +20,7 @@ _SYSTEM_PROMPT = (
 
 
 def build_chat_chain(
-    model: str = "openai/gpt-3.5-turbo",
+    use_case: str = "chat",
     temperature: float = 0.7,
     system_prompt: str = _SYSTEM_PROMPT,
 ) -> Runnable:
@@ -37,7 +37,7 @@ def build_chat_chain(
         temperature: Sampling temperature.
         system_prompt: System message prepended to every conversation.
     """
-    llm = get_llm(model=model, temperature=temperature)
+    llm = get_llm(use_case=use_case, temperature=temperature)
 
     prompt = ChatPromptTemplate.from_messages(
         [

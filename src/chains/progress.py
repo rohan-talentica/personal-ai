@@ -55,7 +55,7 @@ def build_progress_chain():
         chain = build_progress_chain()
         report: str = chain.invoke(docs)
     """
-    llm = get_llm()
+    llm = get_llm(use_case="progress")
     parser = StrOutputParser()
 
     def run(docs: List[Document]) -> str:

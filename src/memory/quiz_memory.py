@@ -8,7 +8,8 @@ to whichever vector store is configured in VECTOR_STORE_PROVIDER.
 from __future__ import annotations
 
 import logging
-from typing import List
+from datetime import date as date_cls
+from typing import List, Optional
 
 from langchain_core.documents import Document
 
@@ -57,6 +58,7 @@ def ingest_quiz_qa(
             "is_correct": str(is_correct).lower(),   # must be str for Chroma where-clause
             "confidence_score": confidence_score,
             "question": question,
+            "quiz_taken_at": date_cls.today().isoformat(),  # date the quiz was actually taken
         },
     )
     get_store(QUIZ_HISTORY_COLLECTION).add_documents([doc])
@@ -66,11 +68,15 @@ def ingest_quiz_qa(
     )
 
 
-def query_weak_areas(limit: int = 30) -> List[Document]:
+def query_weak_areas(
+    limit: int = 30,
+    session_ids: Optional[List[str]] = None,
+) -> List[Document]:
     """Retrieve Q&A pairs where the developer answered incorrectly.
 
     Args:
-        limit: Maximum number of documents to return.
+        limit:       Maximum number of documents to return.
+        session_ids: If given, restrict results to these session IDs.
 
     Returns:
         List of Documents for use by the progress chain.
@@ -78,16 +84,55 @@ def query_weak_areas(limit: int = 30) -> List[Document]:
     docs = get_store(QUIZ_HISTORY_COLLECTION).list_documents(
         filter={"is_correct": "false"}
     )
+    if session_ids is not None:
+        session_set = set(session_ids)
+        docs = [d for d in docs if d.metadata.get("session_id") in session_set]
     return docs[:limit]
 
 
-def get_all_stats() -> dict:
+def get_last_n_session_ids(n: int) -> List[str]:
+    """Return the session_ids of the n most recently taken quiz sessions.
+
+    Sessions are ranked by the latest ``quiz_taken_at`` date recorded among
+    their Q&A pairs. Sessions that pre-date the ``quiz_taken_at`` field (old
+    records) are sorted to the end.
+
+    Args:
+        n: Number of sessions to return.
+
+    Returns:
+        List of session_id strings, most-recent first.
+    """
+    all_docs = get_store(QUIZ_HISTORY_COLLECTION).list_documents()
+    # Map each session_id → its latest quiz_taken_at value
+    session_dates: dict[str, str] = {}
+    for doc in all_docs:
+        sid = doc.metadata.get("session_id")
+        taken_at = doc.metadata.get("quiz_taken_at", "")
+        if sid and taken_at > session_dates.get(sid, ""):
+            session_dates[sid] = taken_at
+    sorted_sessions = sorted(
+        session_dates.keys(),
+        key=lambda s: session_dates[s],
+        reverse=True,
+    )
+    return sorted_sessions[:n]
+
+
+def get_all_stats(session_ids: Optional[List[str]] = None) -> dict:
     """Return aggregate counts from the quiz_history collection.
+
+    Args:
+        session_ids: If given, restrict counts to these session IDs.
 
     Returns:
         dict with keys: total_qa_pairs, weak_qa_pairs, sessions
     """
     all_docs = get_store(QUIZ_HISTORY_COLLECTION).list_documents()
+
+    if session_ids is not None:
+        session_set = set(session_ids)
+        all_docs = [d for d in all_docs if d.metadata.get("session_id") in session_set]
 
     total = len(all_docs)
     weak = sum(1 for d in all_docs if d.metadata.get("is_correct") == "false")

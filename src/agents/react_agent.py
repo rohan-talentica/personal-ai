@@ -33,7 +33,7 @@ Always explain your reasoning briefly before using a tool.
 
 def build_react_agent(
     tools: list[BaseTool] | None = None,
-    model: str = "openai/gpt-3.5-turbo",
+    use_case: str = "agent",
     temperature: float = 0.0,
     max_iterations: int = 6,
     verbose: bool = False,
@@ -57,7 +57,7 @@ def build_react_agent(
     if tools is None:
         tools = ALL_TOOLS
 
-    llm = get_llm(model=model, temperature=temperature)
+    llm = get_llm(use_case=use_case, temperature=temperature)
 
     prompt = ChatPromptTemplate.from_messages(
         [
