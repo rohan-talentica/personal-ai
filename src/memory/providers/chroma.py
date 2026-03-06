@@ -101,6 +101,18 @@ class ChromaAdapter(VectorStoreAdapter):
             for content, meta in zip(raw["documents"], raw["metadatas"])
         ]
 
+    def similarity_search(
+        self,
+        query: str,
+        k: int = 4,
+        filter: dict | None = None,
+    ) -> List[Document]:
+        """Semantic similarity search via Chroma's built-in MMR/cosine."""
+        kwargs: dict = {"k": k}
+        if filter:
+            kwargs["filter"] = filter
+        return self._store().similarity_search(query, **kwargs)
+
     def delete(self) -> None:
         """Delete the entire collection from ChromaDB."""
         try:

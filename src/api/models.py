@@ -152,8 +152,20 @@ class QuizAnswerResponse(BaseModel):
 # Progress Tracker  (/notion/progress)
 # ---------------------------------------------------------------------------
 
+class WeakConcept(BaseModel):
+    concept: str = Field(description="The name of the concept or topic.")
+    count: int = Field(description="Number of times the user struggled with this concept.")
+    gap_description: str = Field(description="Explanation of the specific gap revealed by the user's answers. Distinguish between strengths and weaknesses if applicable.")
+    severity: int = Field(description="Severity score for this gap, from 0 (no gap/strength) to 5 (critical).", ge=0, le=5)
+
+
+class StructuredProgressReport(BaseModel):
+    weak_concepts: list[WeakConcept] = Field(description="List of concepts the user struggled with, ranked by severity or count.")
+    revision_suggestions: list[str] = Field(description="Actionable suggestions for revision.")
+
+
 class ProgressResponse(BaseModel):
     sessions_analysed: int = Field(description="Number of distinct quiz sessions in history.")
     total_qa_pairs: int = Field(description="Total Q&A pairs stored across all sessions.")
     weak_qa_pairs: int = Field(description="Number of Q&A pairs where the answer was incorrect.")
-    report: str = Field(description="LLM-generated markdown report of knowledge gaps.")
+    report: StructuredProgressReport = Field(description="Structured report of knowledge gaps and revision suggestions.")

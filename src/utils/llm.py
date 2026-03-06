@@ -49,8 +49,8 @@ MODEL_REGISTRY: dict[str, dict[str, str]] = {
     },
     # Progress / weakness report — analytical summarisation
     "progress": {
-        "groq":       "llama-3.3-70b-versatile",
-        "openrouter": "openai/gpt-3.5-turbo",
+        "groq":       "meta-llama/llama-4-scout-17b-16e-instruct",  # supports json_schema structured outputs
+        "openrouter": "openai/gpt-4o-mini",
     },
     # Socratic quiz — needs reliable structured JSON-schema output
     "quiz": {

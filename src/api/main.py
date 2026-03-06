@@ -62,6 +62,7 @@ from src.memory.vector_store import (
 from src.memory.quiz_memory import (
     ingest_quiz_qa,
     query_weak_areas,
+    query_by_topic,
     get_all_stats,
     get_last_n_session_ids,
 )
@@ -558,7 +559,7 @@ async def notion_quiz_answer(session_id: str, body: QuizAnswerRequest, graph=Dep
                     None,
                     lambda: ingest_quiz_qa(
                         session_id=session_id,
-                        date=state_values.get("date", "unknown"),
+                        notes_date=state_values.get("date", "unknown"),
                         question=ai_question,
                         answer=user_answer,
                         feedback=eval_feedback,
@@ -587,42 +588,55 @@ async def notion_quiz_answer(session_id: str, body: QuizAnswerRequest, graph=Dep
 
 @app.get("/notion/progress", response_model=ProgressResponse, tags=["Notion"])
 async def notion_progress(
+    question: Optional[str] = Query(
+        None,
+        description="Natural language question about quiz performance, e.g. 'how did I do on caching?'. "
+                    "When provided, uses semantic search instead of a general weakness report.",
+    ),
     last_n_sessions: Optional[int] = Query(
         None,
         ge=1,
         description="Limit analysis to the N most recent quiz sessions. Omit to analyse all sessions.",
-    )
+    ),
 ):
-    """Return a personalised weakness report based on past quiz sessions.
+    """Return a personalised progress report based on past quiz sessions.
 
-    Retrieves Q&A pairs where you answered incorrectly from the persistent
-    ``quiz_history`` ChromaDB collection, then asks the LLM to identify
-    recurring knowledge gaps and rank them by frequency.
+    Retrieval strategy depends on the combination of parameters:
 
-    Pass ``?last_n_sessions=N`` to restrict the report to the N most recent sessions.
-    Omit the parameter to analyse all sessions.
+    - **No params**: general weakness report across all sessions.
+    - **question only**: semantic search across all sessions, answers the specific question.
+    - **last_n_sessions only**: general weakness report scoped to the N most recent sessions.
+    - **Both**: semantic search scoped to the N most recent sessions.
     """
     from src.chains.progress import build_progress_chain
 
     try:
+        loop = asyncio.get_event_loop()
+
+        # Resolve session scope
         target_session_ids = None
         if last_n_sessions is not None:
-            target_session_ids = await asyncio.get_event_loop().run_in_executor(
+            target_session_ids = await loop.run_in_executor(
                 None, lambda: get_last_n_session_ids(last_n_sessions)
             )
 
-        stats = await asyncio.get_event_loop().run_in_executor(
+        # Retrieve documents using the appropriate strategy
+        if question:
+            docs = await loop.run_in_executor(
+                None, lambda: query_by_topic(question, session_ids=target_session_ids)
+            )
+        else:
+            docs = await loop.run_in_executor(
+                None, lambda: query_weak_areas(session_ids=target_session_ids)
+            )
+
+        stats = await loop.run_in_executor(
             None, lambda: get_all_stats(session_ids=target_session_ids)
         )
 
-        docs = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: query_weak_areas(session_ids=target_session_ids)
-        )
-
-        chain = build_progress_chain()
-        report: str = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: chain.invoke(docs),
+        chain = build_progress_chain(question=question)
+        report = await loop.run_in_executor(
+            None, lambda: chain.invoke(docs)
         )
 
         return ProgressResponse(

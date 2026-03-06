@@ -56,6 +56,25 @@ class VectorStoreAdapter(ABC):
         """
 
     @abstractmethod
+    def similarity_search(
+        self,
+        query: str,
+        k: int = 4,
+        filter: dict | None = None,
+    ) -> List[Document]:
+        """Return the k most semantically similar documents to query.
+
+        Args:
+            query:  Natural language question/topic to search for.
+            k:      Number of results to return.
+            filter: Optional metadata filters applied before ranking.
+                    e.g. {"is_correct": False} or {"session_id": "abc"}
+
+        Returns:
+            List of Documents ordered by descending similarity.
+        """
+
+    @abstractmethod
     def delete(self) -> None:
         """Delete the entire collection managed by this adapter.
 

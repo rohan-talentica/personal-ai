@@ -22,9 +22,8 @@ def get_store(collection_name: str) -> VectorStoreAdapter:
     """Return a VectorStoreAdapter for the given collection.
 
     The provider is selected from the VECTOR_STORE_PROVIDER env var:
-        - "chroma"   (default) — ChromaDB Cloud or local PersistentClient
-        - "pinecone"           — Pinecone (add providers/pinecone.py to enable)
-        - "qdrant"             — Qdrant   (add providers/qdrant.py to enable)
+        - "pgvector" (default) — Supabase/Postgres + pgvector (raw psycopg3)
+        - "chroma"             — ChromaDB Cloud or local PersistentClient (legacy)
 
     Args:
         collection_name: The name of the collection / index to operate on.
@@ -35,23 +34,18 @@ def get_store(collection_name: str) -> VectorStoreAdapter:
     Raises:
         ValueError: If VECTOR_STORE_PROVIDER names an unrecognised provider.
     """
-    provider = os.getenv("VECTOR_STORE_PROVIDER", "chroma").lower().strip()
+    provider = os.getenv("VECTOR_STORE_PROVIDER", "pgvector").lower().strip()
+
+    if provider == "pgvector":
+        from src.memory.providers.pgvector import PgVectorAdapter
+        return PgVectorAdapter(collection_name)
 
     if provider == "chroma":
         from src.memory.providers.chroma import ChromaAdapter
         return ChromaAdapter(collection_name)
 
-    # ── Future providers (uncomment + install deps to activate) ───────────────
-    # elif provider == "pinecone":
-    #     from src.memory.providers.pinecone import PineconeAdapter
-    #     return PineconeAdapter(collection_name)
-    #
-    # elif provider == "qdrant":
-    #     from src.memory.providers.qdrant import QdrantAdapter
-    #     return QdrantAdapter(collection_name)
-
     raise ValueError(
         f"Unknown VECTOR_STORE_PROVIDER: '{provider}'. "
-        "Supported values: 'chroma'. "
+        "Supported values: 'pgvector', 'chroma'. "
         "To add a new provider, see src/memory/factory.py."
     )
