@@ -112,23 +112,25 @@ def query_by_topic(
     question: str,
     k: int = 15,
     session_ids: Optional[List[str]] = None,
+    score_threshold: float = 0.65,
 ) -> List[Document]:
     """Retrieve Q&A records most semantically relevant to a natural language question.
 
     Uses cosine similarity search on the embedding column.
 
     Args:
-        question:    Natural language question, e.g. "how did I do on caching?"
-        k:           Number of results to return.
-        session_ids: If given, restrict the search to these session IDs.
+        question:        Natural language question, e.g. "how did I do on caching?"
+        k:               Number of results to return.
+        session_ids:     If given, restrict the search to these session IDs.
+        score_threshold: Maximum distance to consider a record relevant.
 
     Returns:
         List of Documents, most similar first.
     """
     adapter = _get_adapter()
     if session_ids is not None:
-        return adapter.similarity_search_by_sessions(question, session_ids, k=k)
-    return adapter.similarity_search(question, k=k)
+        return adapter.similarity_search_by_sessions(question, session_ids, k=k, score_threshold=score_threshold)
+    return adapter.similarity_search(question, k=k, score_threshold=score_threshold)
 
 
 def get_last_n_session_ids(n: int) -> List[str]:

@@ -41,7 +41,15 @@ from constructs import Construct
 
 
 class PersonalAiStack(Stack):
-    def __init__(self, scope: Construct, construct_id: str, openrouter_api_key: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        openrouter_api_key: str,
+        groq_api_key: str,
+        database_url: str,
+        **kwargs
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         # ── 1. VPC ───────────────────────────────────────────────────────────
@@ -79,20 +87,29 @@ class PersonalAiStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
         )
 
-        # ── 4. SSM Parameter for OPENROUTER_API_KEY ──────────────────────────
-        # Created with a placeholder. Update with the real key BEFORE deploying:
-        #   aws ssm put-parameter \
-        #     --name /personal-ai/OPENROUTER_API_KEY \
-        #     --value "sk-or-..." \
-        #     --type SecureString \
-        #     --overwrite \
-        #     --profile personal-ai --region ap-south-1
+        # ── 4. SSM Parameters for Secrets ────────────────────────────────────
         openrouter_param = ssm.StringParameter(
             self,
             "OpenRouterApiKey",
             parameter_name="/personal-ai/OPENROUTER_API_KEY",
             string_value=openrouter_api_key,
             description="OpenRouter API key — update via CLI before deploying",
+            tier=ssm.ParameterTier.STANDARD,
+        )
+        groq_param = ssm.StringParameter(
+            self,
+            "GroqApiKey",
+            parameter_name="/personal-ai/GROQ_API_KEY",
+            string_value=groq_api_key,
+            description="Groq API key — update via CLI before deploying",
+            tier=ssm.ParameterTier.STANDARD,
+        )
+        db_param = ssm.StringParameter(
+            self,
+            "DatabaseUrl",
+            parameter_name="/personal-ai/DATABASE_URL",
+            string_value=database_url,
+            description="Supabase PgVector Database URL — update via CLI before deploying",
             tier=ssm.ParameterTier.STANDARD,
         )
 
@@ -108,8 +125,10 @@ class PersonalAiStack(Stack):
                 )
             ],
         )
-        # Allow execution role to read the SSM param at container start-up
+        # Allow execution role to read the SSM params at container start-up
         openrouter_param.grant_read(execution_role)
+        groq_param.grant_read(execution_role)
+        db_param.grant_read(execution_role)
 
         # Task role: runtime permissions for the container process itself
         task_role = iam.Role(
@@ -128,9 +147,6 @@ class PersonalAiStack(Stack):
             memory_limit_mib=1024,
             execution_role=execution_role,
             task_role=task_role,
-            # Default ephemeral storage is 21 GB.
-            # ChromaDB writes to /app/data/chroma inside the container.
-            # Data is lost if the task restarts — acceptable for this project.
         )
 
         # ── 7. Container Image (CDK-managed) ─────────────────────────────────
@@ -159,12 +175,11 @@ class PersonalAiStack(Stack):
                 "PORT": "8000",
                 "PYTHONUNBUFFERED": "1",
                 "PYTHONDONTWRITEBYTECODE": "1",
-                # ChromaDB path matches what the Dockerfile creates
-                "CHROMA_DB_PATH": "/app/data/chroma",
             },
             secrets={
-                # Injected at runtime from SSM — never in the image or env file
                 "OPENROUTER_API_KEY": ecs.Secret.from_ssm_parameter(openrouter_param),
+                "GROQ_API_KEY": ecs.Secret.from_ssm_parameter(groq_param),
+                "DATABASE_URL": ecs.Secret.from_ssm_parameter(db_param),
             },
             health_check=ecs.HealthCheck(
                 command=[

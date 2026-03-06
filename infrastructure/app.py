@@ -15,7 +15,9 @@ app = cdk.App()
 PersonalAiStack(
     app,
     "PersonalAiStack",
-    openrouter_api_key=os.environ["OPENROUTER_API_KEY"],
+    openrouter_api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+    groq_api_key=os.environ.get("GROQ_API_KEY", ""),
+    database_url=os.environ.get("DATABASE_URL", ""),
     env=cdk.Environment(
         account="044079590862",
         region="ap-south-1",

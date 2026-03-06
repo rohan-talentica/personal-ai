@@ -189,6 +189,7 @@ class PgVectorAdapter(VectorStoreAdapter):
         query: str,
         k: int = 4,
         filter: dict | None = None,
+        score_threshold: float | None = None,
     ) -> List[Document]:
         """Return the k most semantically similar documents to query.
 
@@ -197,10 +198,11 @@ class PgVectorAdapter(VectorStoreAdapter):
         session-scoped or correctness-filtered topic search.
 
         Args:
-            query:  Natural language question or topic.
-            k:      Number of results to return.
-            filter: Column-value pairs applied as exact-match WHERE conditions.
-                    e.g. ``{"is_correct": False}`` or ``{"session_id": "x"}``
+            query:           Natural language question or topic.
+            k:               Number of results to return.
+            filter:          Column-value pairs applied as exact-match WHERE conditions.
+                             e.g. ``{"is_correct": False}`` or ``{"session_id": "x"}``
+            score_threshold: Optional maximum distance/similarity score.
 
         Returns:
             List of Documents, most similar first.
@@ -215,6 +217,10 @@ class PgVectorAdapter(VectorStoreAdapter):
                 conditions.append(f"{col} = %s")
                 params.append(val)
 
+        if score_threshold is not None:
+            conditions.append("embedding <=> %s::vector <= %s")
+            params.extend([query_vector, score_threshold])
+
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
         sql = f"""
@@ -224,7 +230,7 @@ class PgVectorAdapter(VectorStoreAdapter):
             ORDER BY embedding <=> %s::vector
             LIMIT %s
         """
-        params += [query_vector, k]
+        params.extend([query_vector, k])
 
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -273,6 +279,7 @@ class PgVectorAdapter(VectorStoreAdapter):
         query: str,
         session_ids: List[str],
         k: int = 10,
+        score_threshold: float | None = None,
     ) -> List[Document]:
         """Similarity search scoped to a specific set of sessions.
 
@@ -280,22 +287,34 @@ class PgVectorAdapter(VectorStoreAdapter):
         combine the HNSW index with a session filter efficiently.
 
         Args:
-            query:       Natural language question.
-            session_ids: Restrict results to these session IDs.
-            k:           Number of results to return.
+            query:           Natural language question.
+            session_ids:     Restrict results to these session IDs.
+            k:               Number of results to return.
+            score_threshold: Optional maximum distance/similarity score.
         """
         query_vector = self._embeddings.embed_query(query)
+
+        conditions = ["session_id = ANY(%s)"]
+        params: list = [session_ids]
+        
+        if score_threshold is not None:
+            conditions.append("embedding <=> %s::vector <= %s")
+            params.extend([query_vector, score_threshold])
+
+        where = "WHERE " + " AND ".join(conditions)
 
         sql = f"""
             SELECT {_SELECT_COLS}
             FROM quiz_history
-            WHERE session_id = ANY(%s)
+            {where}
             ORDER BY embedding <=> %s::vector
             LIMIT %s
         """
+        params.extend([query_vector, k])
+
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(sql, (session_ids, query_vector, k))
+                cur.execute(sql, params)
                 rows = cur.fetchall()
 
         return [self._row_to_doc(r) for r in rows]
