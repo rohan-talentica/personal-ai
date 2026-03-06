@@ -10,11 +10,9 @@ from __future__ import annotations
 import logging
 from functools import lru_cache
 
+from fastapi import HTTPException, Request
 from langchain_classic.agents import AgentExecutor
 
-from langgraph.checkpoint.sqlite import SqliteSaver
-
-from src.agents.quiz_graph import build_quiz_graph
 from src.agents.react_agent import build_react_agent
 from src.chains.chat import build_chat_chain
 from src.chains.rag import build_rag_chain
@@ -46,16 +44,16 @@ def get_agent() -> AgentExecutor:
     return build_react_agent()
 
 
-@lru_cache(maxsize=1)
-def get_quiz_graph():
-    """Singleton Quiz graph with SQLite checkpointer."""
-    import sqlite3
-    logger.info("Initialising Quiz graph…")
-    
-    # In langgraph-checkpoint-sqlite v3, SqliteSaver.from_conn_string returns a context manager.
-    # To keep it alive across FastAPI requests as a singleton, we need to pass a connection directly.
-    conn = sqlite3.connect("quiz_sessions.db", check_same_thread=False)
-    checkpointer = SqliteSaver(conn)
-    checkpointer.setup()
-    
-    return build_quiz_graph(checkpointer=checkpointer)
+def get_quiz_graph(request: Request):
+    """Return the Quiz graph compiled with the AsyncPostgresSaver checkpointer.
+
+    The graph is initialised once in the FastAPI lifespan (stored on app.state)
+    so the underlying psycopg connection pool is shared across all requests.
+    """
+    graph = getattr(request.app.state, "quiz_graph", None)
+    if graph is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Quiz graph is not available. Check DATABASE_URL and server logs.",
+        )
+    return graph

@@ -34,7 +34,12 @@ from fastapi.responses import StreamingResponse
 load_dotenv()
 
 # ── Internal imports ─────────────────────────────────────────────────────────
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+from src.agents.quiz_graph import build_quiz_graph
 from src.api.dependencies import get_agent, get_chat_chain, get_quiz_graph, get_rag_chain
+from src.memory.providers.pgvector import PgVectorAdapter
+from src.memory.quiz_memory import QUIZ_HISTORY_COLLECTION, set_adapter
 from src.api.models import (
     AgentRequest,
     AgentResponse,
@@ -93,19 +98,49 @@ async def lifespan(app: FastAPI):
         logger.warning("⚠️  RAG chain init failed (no vector store?): %s", exc)
 
     try:
-        get_quiz_graph()
-        logger.info("✅ Quiz graph ready")
-    except Exception as exc:
-        logger.warning("⚠️  Quiz graph init failed: %s", exc)
-
-    try:
         get_agent()
         logger.info("✅ Agent ready")
     except Exception as exc:
         logger.warning("⚠️  Agent init failed: %s", exc)
 
-    logger.info("🟢 API is ready to serve requests")
-    yield
+    # ── Postgres connection pool (shared across all requests) ──────────────────────
+    # One pool for the whole process — same pattern as NestJS TypeORM / pg-pool.
+    # configure= registers the pgvector type on every connection when created.
+    database_url = os.getenv("DATABASE_URL", "")
+    from psycopg_pool import ConnectionPool as PsycopgPool
+    from pgvector.psycopg import register_vector
+
+    pg_pool = PsycopgPool(
+        database_url,
+        min_size=2,
+        max_size=10,
+        configure=register_vector,  # registers pgvector type on each connection
+        open=True,                  # open the pool immediately (blocking, fast)
+    )
+    app.state.pg_pool = pg_pool
+    logger.info("✅ Postgres connection pool ready (min=2 max=10)")
+
+    # Wire the shared PgVectorAdapter singleton into quiz_memory.
+    # All calls to ingest_quiz_qa / query_weak_areas / etc. reuse this adapter
+    # rather than opening a new connection per call.
+    pg_adapter = PgVectorAdapter(QUIZ_HISTORY_COLLECTION, pool=pg_pool)
+    set_adapter(pg_adapter)
+    logger.info("✅ PgVectorAdapter singleton registered")
+
+    # ── Async Postgres checkpointer ───────────────────────────────────────────
+    async with AsyncPostgresSaver.from_conn_string(database_url) as checkpointer:
+        try:
+            await checkpointer.setup()  # idempotent — creates tables if needed
+            app.state.quiz_graph = build_quiz_graph(checkpointer=checkpointer)
+            logger.info("✅ Quiz graph ready (Postgres checkpointer)")
+        except Exception as exc:
+            logger.warning("⚠️  Quiz graph init failed: %s", exc)
+            app.state.quiz_graph = None
+
+        logger.info("🟢 API is ready to serve requests")
+        yield
+
+    pg_pool.close()
     logger.info("🔴 Shutting down Personal AI API")
 
 
@@ -445,7 +480,7 @@ async def notion_quiz_start(body: QuizStartRequest, graph=Depends(get_quiz_graph
     config = {"configurable": {"thread_id": session_id}}
 
     try:
-        # Initialize the graph state and run until END
+        # Initialize the graph state and run until interrupted (before evaluate_answer)
         initial_state = {
             "date": resolved_date,
             "content": combined_content,
@@ -454,15 +489,13 @@ async def notion_quiz_start(body: QuizStartRequest, graph=Depends(get_quiz_graph
             "asked_concepts": [],
             "messages": []
         }
-        
-        state = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: graph.invoke(initial_state, config=config)
-        )
-        
+
+        # ainvoke uses the AsyncPostgresSaver directly on the event loop — no thread needed
+        state = await graph.ainvoke(initial_state, config=config)
+
         # The generated question is the last message
         latest_message = state["messages"][-1]
-        
+
         return QuizStartResponse(
             session_id=session_id,
             date=resolved_date,
@@ -483,7 +516,7 @@ async def notion_quiz_answer(session_id: str, body: QuizAnswerRequest, graph=Dep
     
     # 1. First, check if thread exists
     try:
-        stored_state = graph.get_state(config)
+        stored_state = await graph.aget_state(config)
         if not stored_state.values:
             raise HTTPException(status_code=404, detail="Quiz session not found or expired.")
     except Exception as exc:
@@ -503,19 +536,16 @@ async def notion_quiz_answer(session_id: str, body: QuizAnswerRequest, graph=Dep
     try:
         # 2. Add the user's answer (as a HumanMessage) to the state thread
         user_msg = HumanMessage(content=body.answer)
-        
-        # update_state appends the message to the state
-        graph.update_state(config, {"messages": [user_msg]})
-        
+
+        # aupdate_state appends the message to the persisted state
+        await graph.aupdate_state(config, {"messages": [user_msg]})
+
         # 3. Resume the graph (it was interrupted before 'evaluate_answer')
         # We pass None as input because the state is already updated.
-        state = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: graph.invoke(None, config=config)
-        )
+        state = await graph.ainvoke(None, config=config)
 
         # is_completed when the graph has no further nodes to run (reached END)
-        next_nodes = graph.get_state(config).next
+        next_nodes = (await graph.aget_state(config)).next
         is_completed = len(next_nodes) == 0
 
         feedback = state.get("evaluation_feedback", "Evaluated.")
@@ -572,6 +602,18 @@ async def notion_quiz_answer(session_id: str, body: QuizAnswerRequest, graph=Dep
         except Exception as ingest_exc:
             # Ingest failure must NOT break the quiz flow
             logger.warning("Phase 3 ingest error (non-fatal): %s", ingest_exc)
+
+        # ── Cleanup: delete checkpoint data for completed sessions ────────────
+        # checkpoint_writes/blobs/checkpoints accumulate indefinitely.
+        # Once a quiz is done there is nothing to resume, so we purge the
+        # thread immediately. The Q&A history is already persisted in
+        # quiz_history (Phase 3) so no data is lost.
+        if is_completed:
+            try:
+                await graph.checkpointer.adelete_thread(session_id)
+                logger.info("Checkpoint data pruned for completed session %s", session_id)
+            except Exception as prune_exc:
+                logger.warning("Checkpoint prune failed (non-fatal): %s", prune_exc)
 
         return QuizAnswerResponse(
             evaluation=feedback,

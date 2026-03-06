@@ -11,14 +11,15 @@ Prerequisites
 2. Set DATABASE_URL in your .env:
        DATABASE_URL=postgresql://postgres:<password>@<host>:5432/postgres
 
-Connection string
------------------
-Supabase exposes two connection strings:
-  • Direct (port 5432) — standard psycopg3; use this.
-  • Pooler  (port 6543) — PgBouncer; works but loses PREPARE support.
+Connection pool
+---------------
+In production the app creates a single ``psycopg_pool.ConnectionPool`` at
+startup and passes it to ``PgVectorAdapter``.  Every query borrows a
+connection from that pool, uses it, and returns it — no open/close overhead
+per request, identical to the NestJS TypeORM / pg-pool pattern.
 
-The adapter uses psycopg v3's context-manager protocol: `with conn:` commits on
-success or rolls back on exception.
+Fallback: when no pool is supplied (e.g. direct script usage), the adapter
+opens a direct ``psycopg.connect()`` per call as before.
 """
 from __future__ import annotations
 
@@ -32,6 +33,11 @@ from langchain_core.documents import Document
 
 from src.memory.base import VectorStoreAdapter
 from src.utils.llm import get_embeddings
+
+try:
+    from psycopg_pool import ConnectionPool as PsycopgPool
+except ImportError:  # psycopg-pool not installed — pool path unavailable
+    PsycopgPool = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -60,22 +66,37 @@ class PgVectorAdapter(VectorStoreAdapter):
 
     The ``collection_name`` argument is accepted for interface compatibility
     but ignored — this adapter is single-table by design.
+
+    Args:
+        collection_name: Kept for interface compatibility, ignored internally.
+        pool:            A ``psycopg_pool.ConnectionPool`` created once at
+                         application startup.  When provided, every query
+                         borrows a connection from the shared pool instead of
+                         opening a new connection.  Pass ``None`` to fall back
+                         to a direct ``psycopg.connect()`` per call (useful in
+                         scripts / tests).
     """
 
-    def __init__(self, collection_name: str) -> None:
+    def __init__(self, collection_name: str, pool=None) -> None:
         self._collection_name = collection_name  # kept for logging only
         self._dsn = _get_dsn()
+        self._pool = pool
         self._embeddings = get_embeddings()
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 
-    def _connect(self) -> psycopg.Connection:
-        """Open a connection and register the pgvector type adapter.
+    def _connect(self):
+        """Return a context manager that yields a ready-to-use psycopg Connection.
 
-        prepare_threshold=None disables prepared statements, which is required
-        when connecting via Supabase Session Pooler (PgBouncer in session mode).
-        It's harmless for direct connections too.
+        Pool path  (production): borrows a connection from the shared pool,
+                                 returns it on exit — zero open/close overhead.
+        Direct path (fallback):  opens a new connection, closes it on exit.
+
+        Both paths support ``with self._connect() as conn:`` identically.
         """
+        if self._pool is not None:
+            return self._pool.connection()
+        # Fallback: direct connection (scripts, tests, local dev without pool)
         conn = psycopg.connect(self._dsn, prepare_threshold=None)
         register_vector(conn)
         return conn

@@ -22,12 +22,32 @@ logger = logging.getLogger(__name__)
 
 QUIZ_HISTORY_COLLECTION = "quiz_history"
 
+# Module-level singleton — set once at application startup via set_adapter().
+# All quiz_memory functions use this when available, falling back to
+# get_store() for direct script / test usage.
+_adapter: PgVectorAdapter | None = None
+
+
+def set_adapter(adapter: PgVectorAdapter) -> None:
+    """Register the shared PgVectorAdapter instance for this process.
+
+    Called once from the FastAPI lifespan after the connection pool is created.
+    Subsequent calls to any quiz_memory function will use this adapter instead
+    of opening a new connection per call.
+    """
+    global _adapter
+    _adapter = adapter
+    logger.info("quiz_memory: shared adapter registered (%s)", type(adapter).__name__)
+
 
 def _get_adapter() -> PgVectorAdapter:
     """Return the PgVectorAdapter for the quiz_history collection.
 
-    Raises RuntimeError if the configured provider is not pgvector.
+    Returns the module-level singleton when available (production),
+    otherwise creates a fresh adapter via the factory (scripts / tests).
     """
+    if _adapter is not None:
+        return _adapter
     adapter = get_store(QUIZ_HISTORY_COLLECTION)
     if not isinstance(adapter, PgVectorAdapter):
         raise RuntimeError(

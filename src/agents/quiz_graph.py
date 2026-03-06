@@ -7,8 +7,8 @@ The graph handles:
 3. Evaluating the user's answer
 4. Recording weak areas and conditionally asking follow-ups
 
-This runs statelessly on FastAPI but uses a checkpointer (SQLite) to
-restore conversation state when the user submits an answer.
+This runs statelessly on FastAPI but uses a checkpointer (AsyncPostgresSaver)
+to restore conversation state when the user submits an answer.
 """
 
 MAX_QUESTIONS = 3
@@ -19,7 +19,6 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 
 from src.utils.llm import get_llm

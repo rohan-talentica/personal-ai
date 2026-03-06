@@ -112,7 +112,46 @@ the agent decides the next question based on your previous answer.
 
 ---
 
-## 🔮 Future Options (Post Mode 3)
+## ✅ Phase 4 — Production-Ready Quiz Sessions — COMPLETE
+
+**What it does**: Migrates the LangGraph quiz checkpointer from ephemeral SQLite (lost on container restart) to persistent Postgres RDS, making quiz sessions survive deployments and restarts.
+
+**Why this matters**: The current SQLite checkpointer lives on ECS container disk — every deploy wipes quiz state. This blocks real production use where sessions need to persist.
+
+### What to build
+- Switch `SqliteSaver` to `AsyncPostgresSaver` in `src/agents/quiz_graph.py`
+- Ensure RDS instance is configured in CDK stack (already exists for ChromaDB)
+- Add database connection string to environment variables
+- Test quiz session persistence across restarts
+
+### Files to modify
+| File | Purpose |
+|------|---------|
+| `src/agents/quiz_graph.py` | Replace `SqliteSaver` with `AsyncPostgresSaver` |
+| `infrastructure/stacks/personal_ai_stack.py` | Verify RDS configuration and connection string |
+| `infrastructure/requirements.txt` | Add `psycopg2-binary` if needed |
+
+### Key decisions made
+- **AsyncPostgresSaver**: LangGraph's first-party Postgres checkpointer for async FastAPI compatibility
+- **RDS reuse**: Leverage existing RDS instance from ChromaDB setup instead of creating a new one
+- **Connection pooling**: Use SQLAlchemy engine for connection management
+
+### Key lessons learned
+- **Async context manager as lifespan resource**: `AsyncPostgresSaver.from_conn_string()` is an async context manager. Entering it inside the FastAPI `lifespan` and wrapping the `yield` keeps the psycopg connection pool alive for the entire app lifetime — a clean pattern for any async resource that must outlive a single request.
+- **app.state for async singletons**: Resources that need async setup can't use `@lru_cache`. Storing them on `request.app.state` during lifespan and reading via a thin `Depends()` function is the idiomatic FastAPI solution.
+- **`checkpointer.setup()` is idempotent**: Calling it on every startup safely creates the checkpoint tables if they don't exist, so no separate migration step is needed.
+
+### Completed
+- [x] Update quiz_graph.py to use AsyncPostgresSaver
+- [x] Add `langgraph-checkpoint-postgres` to requirements.txt
+- [x] Restructure FastAPI lifespan to manage the Postgres connection pool
+- [x] Replace `@lru_cache` dependency with `app.state`-backed request dependency
+- [ ] Add DATABASE_URL environment variable to ECS task definition
+- [ ] Redeploy and verify sessions survive container restarts
+
+---
+
+## 🔮 Future Options (Post Phase 4)
 
 These are the broader directions we discussed. Pick based on what is most interesting
 at the time.
@@ -132,6 +171,7 @@ at the time.
 | **LLM** | OpenRouter → GPT-3.5-turbo (default) |
 | **Vector DB** | **ChromaDB Cloud** (Persistent, multi-tenant) |
 | **Store Provider**| Pluggable Adapter Pattern (Strategy) |
+| **Quiz Sessions** | **AsyncPostgresSaver** (Postgres RDS — persistent across deploys) |
 | **Notion** | Integration connected, DB ID `319a5bf6db5e80549961c5f23841073e` |
 | **Infra** | AWS CDK (Python), ECR for Docker images |
 
