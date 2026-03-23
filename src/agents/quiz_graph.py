@@ -78,6 +78,34 @@ def generate_question(state: QuizState) -> Dict[str, Any]:
     questions_asked = state.get("questions_asked", 0)
     question_number = questions_asked + 1
 
+    # ── Phase 5: Semantic Retrieval ──────────────────────────────────────────
+    # Try to fetch focused chunks from the pre-embedded pgvector store instead
+    # of using the entire day's notes (state['content']).
+    notes_content = state['content']
+    try:
+        import src.memory.notion_memory as notion_memory
+        
+        # We need a query to search vectors. We use a broad prompt if this is
+        # the first question, or we tell the search to find concepts NOT in
+        # our asked_concepts list.
+        search_query = f"core technical concepts excluding {', '.join(asked_concepts)}" if asked_concepts else "key technical concepts"
+        
+        # Search constrained to the date of this quiz session
+        chunks = notion_memory.search_notes(
+            query=search_query,
+            k=4,
+            date_filter=state['date'],
+            score_threshold=0.85
+        )
+        
+        if chunks:
+            notes_content = "\n\n---\n\n".join(doc.page_content for doc in chunks)
+            # We don't log here because print/log inside LangGraph nodes can be noisy,
+            # but notion_memory itself logs the successful retrieval.
+    except Exception as exc:
+        # Graceful fallback to the legacy full-context approach
+        pass
+
     system_prompt = f"""\
 You are a quiz engine. Output ONLY ONE question — nothing else.
 
@@ -90,7 +118,7 @@ Rules (follow every single one):
 6. Do NOT number the question or prefix it with "Question {question_number}:".
 7. Choose a DIFFERENT topic/concept from any already covered — broaden coverage across the notes.{avoid_hint}
 Notes from {state['date']}:
-{state['content']}"""
+{notes_content}"""
 
     # Only pass the system message — no chat history so the LLM has nothing to "respond to"
     result: QuestionOutput = question_llm.invoke([SystemMessage(content=system_prompt)])

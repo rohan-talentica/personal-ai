@@ -49,6 +49,9 @@ from src.api.models import (
     HealthResponse,
     IngestRequest,
     IngestResponse,
+    NotionIngestRequest,
+    NotionIngestResponse,
+    NotionWebhookResponse,
     ProgressResponse,
     RAGRequest,
     RAGResponse,
@@ -71,6 +74,8 @@ from src.memory.quiz_memory import (
     get_all_stats,
     get_last_n_session_ids,
 )
+import src.memory.notion_memory as notion_memory
+
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -126,6 +131,11 @@ async def lifespan(app: FastAPI):
     pg_adapter = PgVectorAdapter(QUIZ_HISTORY_COLLECTION, pool=pg_pool)
     set_adapter(pg_adapter)
     logger.info("✅ PgVectorAdapter singleton registered")
+
+    # Wire the shared pool into notion_memory too
+    notion_memory.set_pool(pg_pool)
+    logger.info("✅ notion_memory pool registered")
+
 
     # ── Async Postgres checkpointer ───────────────────────────────────────────
     async with AsyncPostgresSaver.from_conn_string(database_url) as checkpointer:
@@ -467,15 +477,49 @@ async def notion_quiz_start(body: QuizStartRequest, graph=Depends(get_quiz_graph
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", resolved_date):
         raise HTTPException(status_code=422, detail=f"Invalid date resolved: {resolved_date}")
 
+    # ── Phase 5: Semantic Retrieval First ─────────────────────────────────────
+    # Instead of always hitting the Notion API, try to fetch all embedded chunks
+    # for the requested date from pgvector.
+    import src.memory.notion_memory as notion_memory
+    
     try:
-        notes = await asyncio.get_event_loop().run_in_executor(None, lambda: get_daily_notes(resolved_date))
+        # Fetch up to 20 chunks for this date (covers a typical day's notes)
+        chunks = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: notion_memory.search_notes(
+                query="content",          # Broad query to get everything
+                k=20,
+                date_filter=resolved_date,
+                score_threshold=None      # We just want everything for that date
+            )
+        )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Notion API error: {exc}") from exc
+        logger.warning("Quiz semantic retrieval failed, falling back to Notion: %s", exc)
+        chunks = []
 
-    if not notes:
-        raise HTTPException(status_code=404, detail=f"No notes found for {resolved_date}.")
+    pages_found = 0
+    combined_content = ""
 
-    combined_content = "\n\n---\n\n".join(f"**{note['title']}**\n\n{note['content']}" for note in notes)
+    if chunks:
+        logger.info("notion/quiz: Initialised using %d pre-embedded chunks for %s", len(chunks), resolved_date)
+        # Reconstruct content from chunks
+        combined_content = "\n\n---\n\n".join(doc.page_content for doc in chunks)
+        # Approximate pages_found using unique page_ids
+        pages_found = len(set(doc.metadata.get("page_id") for doc in chunks))
+    else:
+        # Graceful fallback: Live Notion API fetch (Phase 2 behavior)
+        logger.info("notion/quiz: No embedded chunks found for %s, fetching live", resolved_date)
+        try:
+            notes = await asyncio.get_event_loop().run_in_executor(None, lambda: get_daily_notes(resolved_date))
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Notion API error: {exc}") from exc
+
+        if not notes:
+            raise HTTPException(status_code=404, detail=f"No notes found for {resolved_date}.")
+            
+        combined_content = "\n\n---\n\n".join(f"**{note['title']}**\n\n{note['content']}" for note in notes)
+        pages_found = len(notes)
+
     session_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": session_id}}
 
@@ -499,7 +543,7 @@ async def notion_quiz_start(body: QuizStartRequest, graph=Depends(get_quiz_graph
         return QuizStartResponse(
             session_id=session_id,
             date=resolved_date,
-            pages_found=len(notes),
+            pages_found=pages_found,
             question=latest_message.content
         )
     except Exception as exc:
@@ -690,6 +734,195 @@ async def notion_progress(
     except Exception as exc:
         logger.error("Progress endpoint error: %s", exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+# ── Notion Ingest (Phase 5) ─────────────────────────────────────────────────
+
+_INGEST_TOKEN = os.getenv("INGEST_TOKEN", "")
+
+
+@app.post("/notion/ingest", response_model=NotionIngestResponse, tags=["Notion"])
+async def notion_ingest(body: NotionIngestRequest, request: Request):
+    """Manually sync a single Notion page into the vector store.
+
+    Protected by ``X-Ingest-Token`` header — set the ``INGEST_TOKEN`` env var.
+
+    The page content is fetched from Notion, split into heading-scoped chunks,
+    embedded, and upserted into the ``notion_notes`` pgvector table.  Any
+    existing chunks for this page are deleted first so updates are idempotent.
+    """
+    token = request.headers.get("X-Ingest-Token", "")
+    if not _INGEST_TOKEN or token != _INGEST_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Ingest-Token header.")
+
+    from src.tools.notion_tool import extract_page_content, get_page_title, fetch_pages_by_date
+    import re
+
+    try:
+        # Fetch the page object to get title and date
+        client = __import__("src.tools.notion_tool", fromlist=["_get_client"]) 
+        from src.tools.notion_tool import _get_client, _get_database_id
+        notion_client = _get_client()
+
+        page = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: notion_client.pages.retrieve(page_id=body.page_id),
+        )
+
+        from src.tools.notion_tool import get_page_title
+        title = get_page_title(page)
+
+        # Extract the Date property value
+        props = page.get("properties", {})
+        date_str = ""
+        for prop in props.values():
+            if prop.get("type") == "date" and prop.get("date"):
+                date_str = prop["date"].get("start", "")
+                break
+
+        last_edited_time = page.get("last_edited_time", "")
+
+        content = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: extract_page_content(body.page_id),
+        )
+
+        # Delete stale chunks before re-ingesting
+        await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: notion_memory.delete_page(body.page_id),
+        )
+
+        chunks_upserted = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: notion_memory.ingest_page(
+                page_id=body.page_id,
+                title=title,
+                content=content,
+                date=date_str,
+                last_edited_time=last_edited_time,
+            ),
+        )
+
+        logger.info("notion/ingest: page_id=%s title='%s' chunks=%d", body.page_id, title, chunks_upserted)
+        return NotionIngestResponse(
+            page_id=body.page_id,
+            title=title,
+            chunks_upserted=chunks_upserted,
+        )
+    except Exception as exc:
+        logger.error("notion/ingest error: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/notion/webhook", response_model=NotionWebhookResponse, tags=["Notion"])
+async def notion_webhook(request: Request):
+    """Receive Notion webhook events and re-ingest updated pages.
+
+    Notion calls this endpoint automatically when a page is created or updated.
+    Verifies the ``X-Notion-Signature`` HMAC header using ``NOTION_WEBHOOK_SECRET``.
+    """
+    import hmac
+    import hashlib
+    import json
+
+    webhook_secret = os.getenv("NOTION_WEBHOOK_SECRET", "")
+
+    # ── Signature verification ────────────────────────────────────────────────
+    if webhook_secret:
+        signature_header = request.headers.get("X-Notion-Signature", "")
+        raw_body = await request.body()
+        expected_sig = hmac.new(
+            webhook_secret.encode(),
+            raw_body,
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(f"sha256={expected_sig}", signature_header):
+            raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+        payload = json.loads(raw_body)
+    else:
+        # No secret configured — skip verification (dev/testing only)
+        logger.warning("notion/webhook: NOTION_WEBHOOK_SECRET not set — skipping signature check")
+        payload = await request.json()
+
+    # ── Handle Workspace Verification ────────────────────────────────────────
+    # Notion sends a workspace.verification event when setting up a webhook.
+    # We must respond with an HTTP 200 containing the token and workspace_id.
+    payload_type = payload.get("type", "")
+    if payload_type == "workspace.verification":
+        from fastapi.responses import JSONResponse
+        event_data = payload.get("workspace.verification", {})
+        token = event_data.get("token", "")
+        workspace_id = event_data.get("workspace_id", "")
+        
+        logger.info("notion/webhook: handling workspace.verification event for workspace %s", workspace_id)
+        return JSONResponse(
+            content={
+                "type": "workspace.verification",
+                "workspace.verification": {
+                    "token": token,
+                    "workspace_id": workspace_id,
+                }
+            }
+        )
+
+    # ── Extract page_id from payload ─────────────────────────────────────────
+    # Notion webhook payload structure: { "type": "page.updated", "entity": { "id": "..." } }
+    entity = payload.get("entity", {})
+    page_id = entity.get("id", "")
+
+    if not page_id:
+        logger.warning("notion/webhook: no page_id in payload — ignoring")
+        return NotionWebhookResponse(page_id="", status="skipped", message="No page_id in payload")
+
+    logger.info("notion/webhook: received event for page_id=%s", page_id)
+
+    try:
+        from src.tools.notion_tool import extract_page_content, get_page_title
+        from src.tools.notion_tool import _get_client
+
+        notion_client = _get_client()
+        page = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: notion_client.pages.retrieve(page_id=page_id),
+        )
+
+        title = get_page_title(page)
+
+        props = page.get("properties", {})
+        date_str = ""
+        for prop in props.values():
+            if prop.get("type") == "date" and prop.get("date"):
+                date_str = prop["date"].get("start", "")
+                break
+
+        last_edited_time = page.get("last_edited_time", "")
+
+        content = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: extract_page_content(page_id),
+        )
+
+        await asyncio.get_event_loop().run_in_executor(
+            None, lambda: notion_memory.delete_page(page_id)
+        )
+        chunks_upserted = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: notion_memory.ingest_page(
+                page_id=page_id,
+                title=title,
+                content=content,
+                date=date_str,
+                last_edited_time=last_edited_time,
+            ),
+        )
+        logger.info("notion/webhook: re-ingested page_id=%s chunks=%d", page_id, chunks_upserted)
+        return NotionWebhookResponse(page_id=page_id, status="ingested", message=f"{chunks_upserted} chunks upserted")
+
+    except Exception as exc:
+        logger.error("notion/webhook error for page_id=%s: %s", page_id, exc)
+        # Return 200 even on error — Notion will retry on non-2xx, causing infinite loops.
+        return NotionWebhookResponse(page_id=page_id, status="error", message=str(exc))
 
 
 # ── Agent ─────────────────────────────────────────────────────────────────────

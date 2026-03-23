@@ -151,7 +151,63 @@ the agent decides the next question based on your previous answer.
 
 ---
 
-## 🔮 Future Options (Post Phase 4)
+## 🔲 Phase 5 — Notion Pre-Embedding (Semantic Notes Store) — TODO
+
+**What it does**: Instead of fetching Notion pages live on every quiz/revision request,
+pages are chunked and embedded into pgvector at ingest time. The quiz agent uses
+semantic similarity search to retrieve relevant notes — faster, offline-resilient, and
+able to search across *all* dates not just one.
+
+**Sync model**: Two triggers — manual ingest for pages you choose, automatic webhook for updates.
+
+```
+[You want to sync a page]
+    → POST /notion/ingest  { "page_id": "..." }
+        → fetch content → chunk → embed → upsert into pgvector
+
+[You later edit that synced page in Notion]
+    → Notion sends POST /notion/webhook automatically
+        → verify HMAC → delete old chunks → re-embed
+```
+
+### Steps
+
+1. **`src/memory/notion_memory.py`** — New memory module for the `notion_notes` pgvector
+   collection. Provides `ingest_page()`, `delete_page()`, and
+   `search_notes()` (semantic search with optional date filter).
+
+2. **`src/api/main.py`** + **`src/api/models.py`** — Two new endpoints:
+   - `POST /notion/ingest` — accepts `{ "page_id": "..." }`, protected by `X-Ingest-Token` header
+   - `POST /notion/webhook` — Notion calls this on page edit; verifies HMAC signature, re-ingests that page
+
+3. **`src/agents/quiz_graph.py`** — Update `fetch_notes` node to call
+   `notion_memory.search_notes()` first; fall back to live Notion fetch only if
+   the vector search returns zero results.
+
+### Key decisions
+- **Manual page selection** — you choose which pages to embed; no bulk bootstrap needed
+- **Chunk by heading boundary (~500 tokens)** — preserves semantic grouping from your notes
+- **Upsert pattern**: delete old chunks for a page before re-ingesting (clean slate per page)
+- **Graceful degradation**: quiz still works even if a page hasn't been ingested yet
+- **Same pgvector DB, new collection** — reuses existing RDS infra, no new services
+
+### Phase 5.1 — Semantic Topic Search (Refinement)
+- **Goal**: Allow users to say "quiz me on React" (topic) instead of only "quiz me on today" (date).
+- **Commit**: Remove all live Notion API fetching from the quiz path; if it's not in the vector store, it's not in the quiz.
+
+### TODOs
+- [x] Implement `src/memory/notion_memory.py`
+- [x] Add `POST /notion/ingest` (page_id input) + `POST /notion/webhook` endpoints
+- [x] Add `IngestRequest` / `IngestResponse` models
+- [x] Update quiz graph `generate_question` node to use vector search
+- [x] Add `INGEST_TOKEN` + `NOTION_WEBHOOK_SECRET` env vars
+- [ ] Refine `notion_quiz_start` to support global topic-based search
+- [ ] Remove legacy live Notion API fetch from quiz endpoint
+
+
+---
+
+## 🔮 Future Options (Post Phase 5)
 
 These are the broader directions we discussed. Pick based on what is most interesting
 at the time.

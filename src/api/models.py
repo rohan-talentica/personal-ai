@@ -169,3 +169,26 @@ class ProgressResponse(BaseModel):
     total_qa_pairs: int = Field(description="Total Q&A pairs stored across all sessions.")
     weak_qa_pairs: int = Field(description="Number of Q&A pairs where the answer was incorrect.")
     report: StructuredProgressReport = Field(description="Structured report of knowledge gaps and revision suggestions.")
+
+
+# ---------------------------------------------------------------------------
+# Notion Ingest  (/notion/ingest  &  /notion/webhook)
+# ---------------------------------------------------------------------------
+
+class NotionIngestRequest(BaseModel):
+    """Body for POST /notion/ingest — manually sync a single Notion page."""
+    page_id: str = Field(..., min_length=1, description="Notion page UUID to fetch, chunk, and embed.")
+
+
+class NotionIngestResponse(BaseModel):
+    page_id: str
+    title: str
+    chunks_upserted: int
+    message: str = "OK"
+
+
+class NotionWebhookResponse(BaseModel):
+    page_id: str
+    status: str  # "ingested" | "skipped" | "error"
+    message: str = "OK"
+
