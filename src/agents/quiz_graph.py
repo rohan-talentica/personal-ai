@@ -36,6 +36,7 @@ class QuizState(TypedDict):
     evaluation_feedback: str
     last_concept: str           # concept tested in the most recent evaluation
     last_confidence_score: float  # 0.0-1.0 score from the most recent evaluation
+    topic: Optional[str]        # specific topic being quizzed on, if any
     is_completed: bool
 
 
@@ -85,16 +86,19 @@ def generate_question(state: QuizState) -> Dict[str, Any]:
     try:
         import src.memory.notion_memory as notion_memory
         
-        # We need a query to search vectors. We use a broad prompt if this is
-        # the first question, or we tell the search to find concepts NOT in
-        # our asked_concepts list.
-        search_query = f"core technical concepts excluding {', '.join(asked_concepts)}" if asked_concepts else "key technical concepts"
+        # We need a query to search vectors. We use the topic if set,
+        # otherwise a broad prompt.
+        base_query = state.get("topic") or "key technical concepts"
+        search_query = f"{base_query} excluding {', '.join(asked_concepts)}" if asked_concepts else base_query
         
-        # Search constrained to the date of this quiz session
+        # Search constrained to the date if it's a valid date string
+        import re
+        date_filter = state['date'] if re.match(r"^\d{4}-\d{2}-\d{2}$", state['date']) else None
+
         chunks = notion_memory.search_notes(
             query=search_query,
             k=4,
-            date_filter=state['date'],
+            date_filter=date_filter,
             score_threshold=0.85
         )
         

@@ -438,95 +438,116 @@ async def notion_revise(body: RevisionRequest):
 async def notion_quiz_start(body: QuizStartRequest, graph=Depends(get_quiz_graph)):
     """Start a Socratic revision session.
     
-    1. Extracts date from query
-    2. Fetches Notion notes
+    1. Extracts date or topic from query
+    2. Fetches relevant notes from pgvector (NO live Notion fetch)
     3. Starts a LangGraph session to generate the first question
     """
     import uuid
     from datetime import date as date_cls
-    import re
+    import json
     from langchain_core.messages import HumanMessage, SystemMessage
-    from src.tools.notion_tool import get_daily_notes
     from src.utils.llm import get_llm
 
     try:
         today = date_cls.today().isoformat()
         llm = get_llm(use_case="date_extraction", temperature=0)
-        date_resolution_prompt = [
+        
+        extraction_prompt = [
             SystemMessage(
                 content=(
                     f"Today's date is {today}. "
-                    "Your task: identify which calendar date the user is referring to in their message. "
-                    "Output ONLY a single date in YYYY-MM-DD format and nothing else. "
+                    "Your task: identify if the user wants to be quizzed on a specific date OR a specific topic. "
+                    "Output ONLY a JSON object with 'date' (YYYY-MM-DD or null) and 'topic' (string or null). "
                     "Examples:\n"
-                    "  'what did I learn today?' → {today}\n"
-                    "  'test me on Monday's notes' → the most recent Monday\n"
-                    "  'quiz me on March 3rd' → 2026-03-03"
+                    "  'quiz me on today' → {{\"date\": \"{today}\", \"topic\": null}}\n"
+                    "  'test me on React' → {{\"date\": null, \"topic\": \"React\"}}\n"
+                    "  'quiz me on Monday' → {{\"date\": \"2026-03-23\", \"topic\": null}}\n"
+                    "  'quiz me on Python decorators' → {{\"date\": null, \"topic\": \"Python decorators\"}}"
                 ).format(today=today)
             ),
             HumanMessage(content=body.query),
         ]
-        resolved_date: str = await asyncio.get_event_loop().run_in_executor(
+        
+        extraction_result: str = await asyncio.get_event_loop().run_in_executor(
             None,
-            lambda: llm.invoke(date_resolution_prompt).content.strip(),
+            lambda: llm.invoke(extraction_prompt).content.strip(),
         )
+        
+        # Clean up Markdown if the LLM wrapped it in ```json
+        if extraction_result.startswith("```"):
+            extraction_result = extraction_result.strip("```json").strip("```").strip()
+            
+        extraction_data = json.loads(extraction_result)
+        resolved_date = extraction_data.get("date")
+        resolved_topic = extraction_data.get("topic")
+        
+        logger.info("Extracted from quiz query: date=%s, topic=%s", resolved_date, resolved_topic)
     except Exception as exc:
-        logger.error("Date resolution failed: %s", exc)
-        raise HTTPException(status_code=502, detail=f"Could not parse date from query: {exc}") from exc
+        logger.error("Extraction failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Could not understand query: {exc}") from exc
 
-    if not re.match(r"^\d{4}-\d{2}-\d{2}$", resolved_date):
-        raise HTTPException(status_code=422, detail=f"Invalid date resolved: {resolved_date}")
+    if not resolved_date and not resolved_topic:
+        raise HTTPException(
+            status_code=422, 
+            detail="Could not identify a date or topic for the quiz. Try 'quiz me on React' or 'quiz me on yesterday'."
+        )
 
-    # ── Phase 5: Semantic Retrieval First ─────────────────────────────────────
-    # Instead of always hitting the Notion API, try to fetch all embedded chunks
-    # for the requested date from pgvector.
+    # ── Step 2: Semantic Retrieval ──────────────────────────────────────────
     import src.memory.notion_memory as notion_memory
     
+    chunks = []
+    search_label = ""
+    
     try:
-        # Fetch up to 20 chunks for this date (covers a typical day's notes)
-        chunks = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: notion_memory.search_notes(
-                query="content",          # Broad query to get everything
-                k=20,
-                date_filter=resolved_date,
-                score_threshold=None      # We just want everything for that date
+        if resolved_topic:
+            # Topic-based search: global search across all dates
+            search_label = f"topic '{resolved_topic}'"
+            chunks = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: notion_memory.search_notes(
+                    query=resolved_topic,
+                    k=15,
+                    date_filter=None,
+                    score_threshold=0.85  # Allow more breadth for topic search
+                )
+            )
+        else:
+            # Date-based search: restricted to that specific date
+            search_label = f"date {resolved_date}"
+            chunks = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: notion_memory.search_notes(
+                    query="technical concepts",
+                    k=20,
+                    date_filter=resolved_date,
+                    score_threshold=None
+                )
+            )
+    except Exception as exc:
+        logger.error("Quiz retrieval failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Error retrieving notes from semantic store: {exc}")
+
+    if not chunks:
+        raise HTTPException(
+            status_code=404, 
+            detail=(
+                f"No notes found for {search_label} in the semantic store. "
+                "Please ensure you have ingested the relevant Notion pages first using POST /notion/ingest."
             )
         )
-    except Exception as exc:
-        logger.warning("Quiz semantic retrieval failed, falling back to Notion: %s", exc)
-        chunks = []
 
-    pages_found = 0
-    combined_content = ""
+    logger.info("notion/quiz: Initialised using %d chunks for %s", len(chunks), search_label)
+    combined_content = "\n\n---\n\n".join(doc.page_content for doc in chunks)
+    pages_found = len(set(doc.metadata.get("page_id") for doc in chunks))
 
-    if chunks:
-        logger.info("notion/quiz: Initialised using %d pre-embedded chunks for %s", len(chunks), resolved_date)
-        # Reconstruct content from chunks
-        combined_content = "\n\n---\n\n".join(doc.page_content for doc in chunks)
-        # Approximate pages_found using unique page_ids
-        pages_found = len(set(doc.metadata.get("page_id") for doc in chunks))
-    else:
-        # Graceful fallback: Live Notion API fetch (Phase 2 behavior)
-        logger.info("notion/quiz: No embedded chunks found for %s, fetching live", resolved_date)
-        try:
-            notes = await asyncio.get_event_loop().run_in_executor(None, lambda: get_daily_notes(resolved_date))
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Notion API error: {exc}") from exc
-
-        if not notes:
-            raise HTTPException(status_code=404, detail=f"No notes found for {resolved_date}.")
-            
-        combined_content = "\n\n---\n\n".join(f"**{note['title']}**\n\n{note['content']}" for note in notes)
-        pages_found = len(notes)
-
+    # ── Step 3: Start LangGraph Session ──────────────────────────────────────
     session_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": session_id}}
 
     try:
-        # Initialize the graph state and run until interrupted (before evaluate_answer)
         initial_state = {
-            "date": resolved_date,
+            "date": resolved_date or "multiple dates",
+            "topic": resolved_topic,
             "content": combined_content,
             "questions_asked": 0,
             "weak_areas": [],
@@ -534,15 +555,12 @@ async def notion_quiz_start(body: QuizStartRequest, graph=Depends(get_quiz_graph
             "messages": []
         }
 
-        # ainvoke uses the AsyncPostgresSaver directly on the event loop — no thread needed
         state = await graph.ainvoke(initial_state, config=config)
-
-        # The generated question is the last message
         latest_message = state["messages"][-1]
 
         return QuizStartResponse(
             session_id=session_id,
-            date=resolved_date,
+            date=resolved_date or f"Topic: {resolved_topic}",
             pages_found=pages_found,
             question=latest_message.content
         )

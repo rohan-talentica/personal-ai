@@ -141,17 +141,16 @@ the agent decides the next question based on your previous answer.
 - **app.state for async singletons**: Resources that need async setup can't use `@lru_cache`. Storing them on `request.app.state` during lifespan and reading via a thin `Depends()` function is the idiomatic FastAPI solution.
 - **`checkpointer.setup()` is idempotent**: Calling it on every startup safely creates the checkpoint tables if they don't exist, so no separate migration step is needed.
 
-### Completed
 - [x] Update quiz_graph.py to use AsyncPostgresSaver
 - [x] Add `langgraph-checkpoint-postgres` to requirements.txt
 - [x] Restructure FastAPI lifespan to manage the Postgres connection pool
 - [x] Replace `@lru_cache` dependency with `app.state`-backed request dependency
-- [ ] Add DATABASE_URL environment variable to ECS task definition
-- [ ] Redeploy and verify sessions survive container restarts
+- [x] Add DATABASE_URL environment variable to ECS task definition
+- [x] Redeploy and verify sessions survive container restarts
 
 ---
 
-## 🔲 Phase 5 — Notion Pre-Embedding (Semantic Notes Store) — TODO
+## ✅ Phase 5 — Notion Pre-Embedding (Semantic Notes Store) — COMPLETE
 
 **What it does**: Instead of fetching Notion pages live on every quiz/revision request,
 pages are chunked and embedded into pgvector at ingest time. The quiz agent uses
@@ -194,15 +193,14 @@ able to search across *all* dates not just one.
 ### Phase 5.1 — Semantic Topic Search (Refinement)
 - **Goal**: Allow users to say "quiz me on React" (topic) instead of only "quiz me on today" (date).
 - **Commit**: Remove all live Notion API fetching from the quiz path; if it's not in the vector store, it's not in the quiz.
-
-### TODOs
+### Completed
 - [x] Implement `src/memory/notion_memory.py`
 - [x] Add `POST /notion/ingest` (page_id input) + `POST /notion/webhook` endpoints
 - [x] Add `IngestRequest` / `IngestResponse` models
 - [x] Update quiz graph `generate_question` node to use vector search
 - [x] Add `INGEST_TOKEN` + `NOTION_WEBHOOK_SECRET` env vars
-- [ ] Refine `notion_quiz_start` to support global topic-based search
-- [ ] Remove legacy live Notion API fetch from quiz endpoint
+- [x] Refine `notion_quiz_start` to support global topic-based search
+- [x] Remove legacy live Notion API fetch from quiz endpoint
 
 
 ---
